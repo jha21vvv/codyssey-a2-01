@@ -1,0 +1,1643 @@
+================================================================================
+CODYSSEY A2-01 — AI 수학 기반 핵심 구현 소스 코드 통합본 (NotebookLM용)
+포함 파일: src/__init__.py, src/linear_algebra.py, src/calculus.py, src/optimizer.py
+================================================================================
+
+
+################################################################################
+# FILE: src/__init__.py
+################################################################################
+
+"""Codyssey A2-01 AI 수학 기반 모듈 패키지."""
+
+
+################################################################################
+# FILE: src/linear_algebra.py
+################################################################################
+
+"""선형대수(Linear Algebra) 핵심 구현 및 시각화 모듈.
+
+포함 기능:
+- 2D 행렬 변환(회전, 스케일링, 전단) 생성 및 단위 원/격자 시각화
+- 행렬식 det(A)와 변환 전후 도형 면적 비율 비교 검증 (오차 1% 이내)
+- Power Iteration 기반 최대 고유값 및 대응 고유벡터 계산
+- SVD 기반 64x64 이하 Grayscale 이미지 압축 및 복원 (k=10, 50, 100)
+"""
+
+# [1차]: 파일 및 디렉토리 경로 처리를 위해 pathlib의 Path 클래스를 임포트합니다.
+# [2차]: 결과 이미지들을 저장할 폴더 주소를 다루기 위해 주소록 도구를 꺼냅니다.
+from pathlib import Path
+# [1차]: 타입 힌트(Dict, List, Optional, Sequence, Tuple)를 위해 typing 모듈에서 임포트합니다.
+# [2차]: 함수가 어떤 자료형의 데이터를 받고 돌려주는지 안내하는 이름표를 준비합니다.
+from typing import Dict, List, Optional, Sequence, Tuple
+
+# [1차]: Matplotlib 핵심 패키지를 임포트합니다.
+# [2차]: 도형과 이미지를 그릴 도화지 세트를 꺼냅니다.
+import matplotlib
+# [1차]: GUI 창을 띄우지 않고 파일로만 렌더링하도록 'Agg' 백엔드를 지정합니다.
+# [2차]: 화면에 창을 띄우지 않고 조용히 사진 파일(.png)로만 인화하게 설정합니다.
+matplotlib.use("Agg")
+# [1차]: pyplot 모듈을 plt 별칭으로 임포트합니다.
+# [2차]: 그래프를 그리는 간편한 리모컨을 plt라고 부릅니다.
+import matplotlib.pyplot as plt
+# [1차]: 수치 연산 라이브러리 NumPy를 np 별칭으로 임포트합니다.
+# [2차]: 행렬 곱셈, 삼각함수, SVD를 빠르게 처리하는 공학용 계산기를 불러옵니다.
+import numpy as np
+
+
+# [1차]: 회전 각도 theta(라디안)를 받아 (2, 2) 회전 변환 행렬을 생성하는 함수입니다.
+# [2차]: 도화지 위의 점들을 원점 기준으로 theta만큼 빙글 돌려주는 회전판을 만듭니다.
+def rotation_matrix(theta: float) -> np.ndarray:
+    """2D 회전 변환 행렬 R(theta)를 생성합니다.
+
+    수식:
+        R(theta) = [[cos(theta), -sin(theta)],
+                    [sin(theta),  cos(theta)]]
+
+    Args:
+        theta: 반시계 방향 회전 각도 (라디안).
+
+    Returns:
+        (2, 2) 크기의 회전 변환 행렬.
+    """
+    # [1차]: 코사인 값 cos(theta)를 float로 계산합니다.
+    # [2차]: 회전 후 가로 성분이 얼마나 남는지 비율을 잽니다.
+    c = float(np.cos(theta))
+    # [1차]: 사인 값 sin(theta)를 float로 계산합니다.
+    # [2차]: 회전 후 세로 방향으로 얼마나 꺾이는지 비율을 잽니다.
+    s = float(np.sin(theta))
+    # [1차]: [[c, -s], [s, c]] 2x2 float64 배열을 생성해 반환합니다.
+    # [2차]: 네 칸짜리 회전판 행렬을 조립해서 돌려줍니다.
+    return np.array([[c, -s], [s, c]], dtype=np.float64)
+
+
+# [1차]: x축 배율 sx와 y축 배율 sy를 받아 (2, 2) 스케일링 변환 행렬을 생성합니다.
+# [2차]: 고무판을 가로로 sx배, 세로로 sy배 늘리거나 줄이는 확대/축소기를 만듭니다.
+def scaling_matrix(sx: float, sy: float) -> np.ndarray:
+    """2D 스케일링 변환 행렬 S(sx, sy)를 생성합니다.
+
+    수식:
+        S(sx, sy) = [[sx, 0],
+                     [0, sy]]
+
+    Args:
+        sx: x축 방향 배율.
+        sy: y축 방향 배율.
+
+    Returns:
+        (2, 2) 크기의 스케일링 변환 행렬.
+    """
+    # [1차]: 주대각선에 sx, sy를 배치한 (2, 2) float64 대각행렬을 반환합니다.
+    # [2차]: 가로는 sx배, 세로는 sy배로 바꾸는 확대/축소 행렬을 돌려줍니다.
+    return np.array([[float(sx), 0.0], [0.0, float(sy)]], dtype=np.float64)
+
+
+# [1차]: x축 전단 계수 kx와 y축 전단 계수 ky를 받아 (2, 2) 전단 행렬을 생성합니다.
+# [2차]: 네모난 카드 덱을 옆으로 비스듬히 밀어 평행사변형으로 기울이는 전단기를 만듭니다.
+def shear_matrix(kx: float, ky: float = 0.0) -> np.ndarray:
+    """2D 전단(Shear) 변환 행렬 Sh(kx, ky)를 생성합니다.
+
+    수식:
+        Sh(kx, ky) = [[1,  kx],
+                      [ky, 1 ]]
+
+    Args:
+        kx: x축 방향 전단 계수.
+        ky: y축 방향 전단 계수 (기본값 0.0).
+
+    Returns:
+        (2, 2) 크기의 전단 변환 행렬.
+    """
+    # [1차]: 주대각선이 1이고 비대각 성분이 kx, ky인 (2, 2) 전단 행렬을 반환합니다.
+    # [2차]: 높이는 그대로 두고 옆으로 비스듬히 밀어주는 기울이기 행렬을 돌려줍니다.
+    return np.array([[1.0, float(kx)], [float(ky), 1.0]], dtype=np.float64)
+
+
+# [1차]: n_points개의 점을 등간격으로 배치하여 (2, n_points) 단위 원 좌표를 생성합니다.
+# [2차]: 반지름이 1인 동그란 고무줄 위에 점 100개를 똑같은 간격으로 찍어냅니다.
+def generate_unit_circle(n_points: int = 100) -> np.ndarray:
+    """단위 원 위의 점들을 (2, n_points) 배열로 생성합니다.
+
+    수식:
+        x = cos(theta), y = sin(theta), theta in [0, 2*pi]
+
+    Args:
+        n_points: 생성할 점의 개수 (최소 3 이상).
+
+    Returns:
+        (2, n_points) 크기의 좌표 배열.
+
+    Raises:
+        ValueError: n_points가 3 미만일 때 발생.
+    """
+    # [1차]: 다각형 면적 근사를 위해 점 개수가 3개 미만인지 검사합니다.
+    # [2차]: 점이 2개 이하이면 선분일 뿐 넓이가 있는 도형이 안 되므로 막습니다.
+    if n_points < 3:
+        # [1차]: n_points < 3일 때 ValueError 예외를 발생시킵니다.
+        # [2차]: "최소 3개 이상의 점이 필요합니다"라고 안내합니다.
+        raise ValueError("단위 원 근사를 위해 n_points는 3 이상이어야 합니다.")
+    # [1차]: 0부터 2*pi까지 n_points개의 균등 각도 배열 theta를 생성합니다.
+    # [2차]: 0도부터 360도(2π)까지 100개의 각도 눈금을 만듭니다.
+    theta = np.linspace(0.0, 2.0 * np.pi, n_points)
+    # [1차]: cos(theta) 행과 sin(theta) 행을 수직 결합(vstack)해 (2, N) 배열로 반환합니다.
+    # [2차]: 첫 번째 줄엔 x좌표, 두 번째 줄엔 y좌표를 나란히 쌓아 원 좌표표를 돌려줍니다.
+    return np.vstack([np.cos(theta), np.sin(theta)])
+
+
+# [1차]: 사선 공식(Shoelace Formula)으로 (2, N) 꼭짓점 배열의 다각형 면적을 계산합니다.
+# [2차]: 운동화 끈을 엇갈려 묶는 공식으로 도형이 변환 전후 몇 평방미터인지 정확히 잽니다.
+def compute_polygon_area(points: np.ndarray) -> float:
+    """사선 공식(Shoelace Formula)을 사용하여 2D 다각형의 면적을 계산합니다.
+
+    수식:
+        Area = 0.5 * |sum_{i=0}^{n-1} (x_i * y_{i+1} - x_{i+1} * y_i)|
+
+    Args:
+        points: (2, N) 크기의 2D 꼭짓점 좌표 배열.
+
+    Returns:
+        계산된 다각형의 양수 면적.
+
+    Raises:
+        ValueError: points의 차원이 (2, N) 형태가 아니거나 N < 3일 때 발생.
+    """
+    # [1차]: 입력 points를 float64형 NumPy 배열로 변환합니다.
+    # [2차]: 들어온 점들을 계산 가능한 숫자 표로 정리합니다.
+    pts = np.asarray(points, dtype=np.float64)
+    # [1차]: 배열이 2차원이며 첫 번째 축이 2(x, y), 점 개수가 3 이상인지 검증합니다.
+    # [2차]: (2, N) 모양이 아니거나 점이 3개 미만이면 넓이를 잴 수 없으므로 거부합니다.
+    if pts.ndim != 2 or pts.shape[0] != 2 or pts.shape[1] < 3:
+        # [1차]: 잘못된 좌표 배열 형태에 대해 ValueError를 발생시킵니다.
+        # [2차]: 올바른 (2, N) 좌표표를 넣으라고 알립니다.
+        raise ValueError("points는 (2, N) 형태이며 N >= 3이어야 합니다.")
+    # [1차]: 0번 행(모든 x좌표)을 슬라이싱합니다.
+    # [2차]: x좌표 목록만 따로 꺼냅니다.
+    x = pts[0]
+    # [1차]: 1번 행(모든 y좌표)을 슬라이싱합니다.
+    # [2차]: y좌표 목록만 따로 꺼냅니다.
+    y = pts[1]
+    # [1차]: np.roll로 x 배열을 왼쪽으로 1칸 순환 이동시켜 다음 점의 x좌표를 얻습니다.
+    # [2차]: 옆 사람(다음 꼭짓점)의 x좌표를 내 앞으로 한 칸씩 당겨 짝을 짓습니다.
+    x_next = np.roll(x, -1)
+    # [1차]: np.roll로 y 배열을 왼쪽으로 1칸 순환 이동시켜 다음 점의 y좌표를 얻습니다.
+    # [2차]: 다음 꼭짓점의 y좌표도 내 앞으로 한 칸 당겨 짝을 짓습니다.
+    y_next = np.roll(y, -1)
+    # [1차]: 교차 곱의 차를 모두 합산한 뒤 절댓값의 0.5배를 float로 반환합니다.
+    # [2차]: X자로 엇갈려 곱하고 뺀 값을 전부 더해 반으로 나누어 정확한 넓이를 돌려줍니다.
+    return float(0.5 * np.abs(np.sum(x * y_next - x_next * y)))
+
+
+# [1차]: (2, 2) 행렬의 |det(A)|와 단위 원 변환 전후 면적 비율의 상대 오차를 계산해 반환합니다.
+# [2차]: "행렬식이 진짜 도형 넓이의 배율과 같은가?"를 실제 넓이를 재서 1% 이내인지 시험합니다.
+def verify_determinant_area(
+    matrix: np.ndarray,
+    n_points: int = 100,
+) -> Dict[str, float]:
+    """행렬식 |det(A)|와 변환 전후 단위 원 면적 비율의 일치 여부를 검증합니다.
+
+    수식:
+        |det(A)| == Area(A @ Circle) / Area(Circle)
+
+    Args:
+        matrix: (2, 2) 변환 행렬.
+        n_points: 단위 원 근사에 사용할 점 개수.
+
+    Returns:
+        abs_det, area_before, area_after, area_ratio, rel_error 를 담은 딕셔너리.
+
+    Raises:
+        ValueError: matrix가 (2, 2) 형태가 아닐 때 발생.
+    """
+    # [1차]: 입력 matrix를 float64형 NumPy 배열로 변환합니다.
+    # [2차]: 변환 행렬을 숫자 표로 정리합니다.
+    mat = np.asarray(matrix, dtype=np.float64)
+    # [1차]: 행렬 크기가 (2, 2)인지 검사합니다.
+    # [2차]: 2D 평면 변환용 2x2 행렬이 아니면 오류를 냅니다.
+    if mat.shape != (2, 2):
+        # [1차]: (2, 2)가 아닌 경우 ValueError를 발생시킵니다.
+        # [2차]: 2x2 행렬만 넣으라고 안내합니다.
+        raise ValueError("2D 면적 검증을 위해 matrix는 (2, 2) 형태여야 합니다.")
+
+    # [1차]: n_points개의 점으로 구성된 단위 원 좌표를 생성합니다.
+    # [2차]: 기준이 될 동그란 고무판(단위 원)을 만듭니다.
+    circle = generate_unit_circle(n_points=n_points)
+    # [1차]: 행렬 곱셈(@)으로 단위 원의 모든 점을 한 번에 선형 변환합니다.
+    # [2차]: 고무판 위의 모든 점에 행렬을 곱해 찌그러뜨리거나 돌립니다.
+    transformed = mat @ circle
+
+    # [1차]: 변환 전 단위 원의 다각형 면적을 계산합니다.
+    # [2차]: 변형 전 원래 동그라미의 넓이를 잽니다.
+    area_before = compute_polygon_area(circle)
+    # [1차]: 변환 후 도형의 다각형 면적을 계산합니다.
+    # [2차]: 변형 후 찌그러진 도형의 넓이를 잽니다.
+    area_after = compute_polygon_area(transformed)
+    # [1차]: 변환 전 대비 변환 후 면적 비율을 계산합니다.
+    # [2차]: 넓이가 실제로 몇 배 변했는지(나중 넓이 ÷ 처음 넓이) 계산합니다.
+    area_ratio = area_after / area_before
+    # [1차]: np.linalg.det로 행렬식을 구한 뒤 절댓값을 취합니다.
+    # [2차]: 행렬식 공식이 예측한 넓이 배율(|det(A)|)을 계산합니다.
+    abs_det = float(np.abs(np.linalg.det(mat)))
+
+    # [1차]: 행렬식이 0(특이 행렬)인 경우 0 나눗셈을 피하기 위해 절대 오차를 사용합니다.
+    # [2차]: 도형이 납작한 선으로 찌그러져 넓이가 0이 된 특수 상황이면 0으로 나누지 않고 차이만 잽니다.
+    if abs_det == 0.0:
+        # [1차]: 면적 비율과 0의 절대 차이를 계산합니다.
+        # [2차]: 절대 오차를 기록합니다.
+        rel_error = float(np.abs(area_ratio - abs_det))
+    else:
+        # [1차]: |area_ratio - |det(A)|| / |det(A)| 상대 오차를 계산합니다.
+        # [2차]: 예측 배율과 실제 넓이 배율이 몇 % 차이나는지 계산합니다.
+        rel_error = float(np.abs(area_ratio - abs_det) / abs_det)
+
+    # [1차]: 검증 지표 5가지를 담은 딕셔너리를 반환합니다.
+    # [2차]: 행렬식, 전후 넓이, 비율, 오차를 한눈에 보기 좋은 보고서 상자에 담아 돌려줍니다.
+    return {
+        "abs_det": abs_det,
+        "area_before": area_before,
+        "area_after": area_after,
+        "area_ratio": area_ratio,
+        "rel_error": rel_error,
+    }
+
+
+# [1차]: 회전, 스케일링, 전단 변환 결과를 개별 및 통합 Figure로 그려 PNG로 저장합니다.
+# [2차]: 동그라미와 격자가 회전·확대·기울어짐을 겪으며 어떻게 변하는지 사진 4장으로 인화합니다.
+def visualize_matrix_transforms(
+    output_dir: str = "outputs",
+    theta: float = np.pi / 4.0,
+    shear_k: float = 1.0,
+) -> List[str]:
+    """회전, 스케일링, 전단 변환 전후의 단위 원과 격자를 시각화하여 PNG로 저장합니다.
+
+    Args:
+        output_dir: 결과 PNG 파일을 저장할 디렉토리 경로.
+        theta: 회전 행렬 각도 (라디안, 기본 pi/4).
+        shear_k: 전단 행렬 계수 (기본 1.0).
+
+    Returns:
+        생성된 PNG 파일 경로 문자열 목록.
+    """
+    # [1차]: 출력 경로 Path 객체를 생성합니다.
+    # [2차]: 사진을 넣을 보관함 주소를 준비합니다.
+    out_path = Path(output_dir)
+    # [1차]: 디렉토리가 없으면 생성합니다.
+    # [2차]: 보관함 폴더가 없으면 새로 만듭니다.
+    out_path.mkdir(parents=True, exist_ok=True)
+    # [1차]: 음수 눈금 깨짐을 방지합니다.
+    # [2차]: 마이너스 기호가 네모로 깨지지 않게 설정합니다.
+    plt.rcParams["axes.unicode_minus"] = False
+
+    # [1차]: 단위 원 좌표를 생성합니다.
+    # [2차]: 동그라미 점 100개를 만듭니다.
+    circle = generate_unit_circle(n_points=100)
+    # [1차]: -1.2 ~ 1.2 범위의 7x7 2D 격자를 생성합니다.
+    # [2차]: 공간이 어떻게 휘어지는지 보기 위해 바둑판 점 49개를 만듭니다.
+    gx, gy = np.meshgrid(np.linspace(-1.2, 1.2, 7), np.linspace(-1.2, 1.2, 7))
+    # [1차]: 격자 좌표를 (2, 49) 형태로 평탄화(ravel)해 수직 결합합니다.
+    # [2차]: 49개의 바둑판 점을 행렬 곱셈하기 좋게 두 줄 표로 나열합니다.
+    grid_pts = np.vstack([gx.ravel(), gy.ravel()])
+
+    # [1차]: 시각화할 3가지 변환(제목, 행렬, 파일명) 튜플 리스트를 정의합니다.
+    # [2차]: 회전, 스케일링, 전단 3가지 실험 목록을 순서대로 적어둡니다.
+    transforms = [
+        ("Rotation R(pi/4)", rotation_matrix(theta), "la_rotation.png"),
+        ("Scaling S(2, 0.5)", scaling_matrix(2.0, 0.5), "la_scaling.png"),
+        (f"Shear Sh({shear_k})", shear_matrix(shear_k), "la_shear.png"),
+    ]
+
+    # [1차]: 생성된 PNG 경로를 저장할 빈 리스트를 초기화합니다.
+    # [2차]: 완성된 사진 주소들을 담을 바구니를 만듭니다.
+    saved_paths: List[str] = []
+
+    # [1차]: 3개 변환을 한눈에 비교할 1x3 통합 Figure를 생성합니다.
+    # [2차]: 세 가지 변환을 나란히 붙여서 볼 큰 파노라마 도화지를 펼칩니다.
+    fig_all, axes_all = plt.subplots(1, 3, figsize=(15, 5))
+    # [1차]: 변환 목록을 인덱스와 함께 순회합니다.
+    # [2차]: 회전, 스케일링, 전단을 하나씩 차례로 그립니다.
+    for idx, (title, mat, fname) in enumerate(transforms):
+        # [1차]: 단위 원에 변환 행렬을 곱합니다.
+        # [2차]: 동그라미 점들에 행렬을 적용해 새 모양을 만듭니다.
+        transformed_circle = mat @ circle
+        # [1차]: 격자 점들에 변환 행렬을 곱합니다.
+        # [2차]: 바둑판 점들도 같이 변형시킵니다.
+        transformed_grid = mat @ grid_pts
+        # [1차]: 행렬식과 면적 비율 검증 통계를 계산합니다.
+        # [2차]: 이 변환의 넓이 배율(|det|)과 실제 면적 비율을 잽니다.
+        stats = verify_determinant_area(mat)
+
+        # [1차]: 개별 변환용 6x6 Figure를 생성합니다.
+        # [2차]: 각 변환을 크게 따로 저장할 단독 도화지를 펼칩니다.
+        fig_single, ax_s = plt.subplots(figsize=(6, 6))
+        # [1차]: 변환 전 격자 점들을 회색 산점도로 그립니다.
+        # [2차]: 원래 바둑판 점들을 흐린 회색으로 찍습니다.
+        ax_s.scatter(grid_pts[0], grid_pts[1], color="#bdc3c7", s=12, alpha=0.5, label="Original Grid")
+        # [1차]: 변환 후 격자 점들을 주황색 산점도로 그립니다.
+        # [2차]: 밀려나간 바둑판 점들을 주황색으로 찍습니다.
+        ax_s.scatter(transformed_grid[0], transformed_grid[1], color="#f39c12", s=12, alpha=0.5, label="Transformed Grid")
+        # [1차]: 변환 전 단위 원을 파란 점선('b--')으로 그립니다.
+        # [2차]: 원래 동그라미를 파란 점선으로 그립니다.
+        ax_s.plot(circle[0], circle[1], "b--", linewidth=2, label="Unit Circle (Before)")
+        # [1차]: 변환 후 도형을 빨간 실선('r-')으로 겹쳐 그립니다.
+        # [2차]: 변형된 타원이나 기울어진 모양을 빨간 실선으로 겹쳐 그립니다.
+        ax_s.plot(transformed_circle[0], transformed_circle[1], "r-", linewidth=2.5, label="Transformed (After)")
+        # [1차]: x축 기준선(y=0)을 그립니다.
+        # [2차]: 가로 중심선을 긋습니다.
+        ax_s.axhline(0, color="gray", linewidth=0.6)
+        # [1차]: y축 기준선(x=0)을 그립니다.
+        # [2차]: 세로 중심선을 긋습니다.
+        ax_s.axvline(0, color="gray", linewidth=0.6)
+        # [1차]: 가로세로 비율을 1:1로 고정합니다.
+        # [2차]: 원이 찌그러져 보이지 않도록 비율을 1:1로 맞춥니다.
+        ax_s.set_aspect("equal", adjustable="box")
+        # [1차]: 점선 격자를 표시합니다.
+        # [2차]: 모눈종이를 켭니다.
+        ax_s.grid(True, linestyle=":", alpha=0.6)
+        # [1차]: 행렬식과 면적 비율을 포함한 제목을 설정합니다.
+        # [2차]: 제목에 |det(A)| 값과 실제 면적 비율을 적어 증명합니다.
+        ax_s.set_title(
+            f"{title}\n|det(A)|={stats['abs_det']:.4f}, Area Ratio={stats['area_ratio']:.4f}"
+        )
+        # [1차]: 우측 상단에 범례를 표시합니다.
+        # [2차]: 설명표를 붙입니다.
+        ax_s.legend(loc="upper right", fontsize=8)
+        # [1차]: 개별 파일 저장 경로를 조합합니다.
+        # [2차]: 단독 사진 파일 이름을 정합니다.
+        single_path = out_path / fname
+        # [1차]: 여백을 자동 정리합니다.
+        # [2차]: 글자가 잘리지 않게 여백을 맞춥니다.
+        fig_single.tight_layout()
+        # [1차]: 150 DPI PNG로 저장합니다.
+        # [2차]: 사진 파일로 인화합니다.
+        fig_single.savefig(single_path, dpi=150)
+        # [1차]: 개별 Figure를 닫아 메모리를 해제합니다.
+        # [2차]: 다 쓴 단독 도화지를 치웁니다.
+        plt.close(fig_single)
+        # [1차]: 저장 경로를 리스트에 추가합니다.
+        # [2차]: 사진 주소를 바구니에 담습니다.
+        saved_paths.append(str(single_path))
+
+        # [1차]: 통합 Figure의 idx번째 서브플롯을 선택합니다.
+        # [2차]: 파노라마 도화지의 해당 칸에 똑같이 그릴 준비를 합니다.
+        ax_a = axes_all[idx]
+        # [1차]: 변환 전 단위 원을 파란 점선으로 그립니다.
+        # [2차]: 원래 동그라미를 그립니다.
+        ax_a.plot(circle[0], circle[1], "b--", linewidth=2, label="Before")
+        # [1차]: 변환 후 도형을 빨간 실선으로 그립니다.
+        # [2차]: 변형된 도형을 그립니다.
+        ax_a.plot(transformed_circle[0], transformed_circle[1], "r-", linewidth=2.5, label="After")
+        # [1차]: x축 중심선을 그립니다.
+        # [2차]: 가로 중심선을 긋습니다.
+        ax_a.axhline(0, color="gray", linewidth=0.6)
+        # [1차]: y축 중심선을 그립니다.
+        # [2차]: 세로 중심선을 긋습니다.
+        ax_a.axvline(0, color="gray", linewidth=0.6)
+        # [1차]: 1:1 비율을 고정합니다.
+        # [2차]: 비율을 1:1로 맞춥니다.
+        ax_a.set_aspect("equal", adjustable="box")
+        # [1차]: 격자를 켭니다.
+        # [2차]: 모눈종이를 켭니다.
+        ax_a.grid(True, linestyle=":", alpha=0.6)
+        # [1차]: 서브플롯 제목에 요약 수치를 표시합니다.
+        # [2차]: 각 칸 위에 행렬식과 비율을 적습니다.
+        ax_a.set_title(f"{title}\n|det|={stats['abs_det']:.3f}, Ratio={stats['area_ratio']:.3f}")
+        # [1차]: 범례를 표시합니다.
+        # [2차]: 설명표를 붙입니다.
+        ax_a.legend(loc="upper right", fontsize=8)
+
+    # [1차]: 통합 이미지 저장 경로를 설정합니다.
+    # [2차]: 파노라마 사진 이름을 정합니다.
+    all_path = out_path / "la_transforms.png"
+    # [1차]: 통합 Figure 상단 제목을 설정합니다.
+    # [2차]: 맨 위에 큰 제목을 적습니다.
+    fig_all.suptitle("2D Linear Transformations & Determinant Area Ratio", fontsize=13, fontweight="bold")
+    # [1차]: 여백을 정리합니다.
+    # [2차]: 여백을 맞춥니다.
+    fig_all.tight_layout()
+    # [1차]: 통합 PNG 파일을 저장합니다.
+    # [2차]: 파노라마 사진을 인화합니다.
+    fig_all.savefig(all_path, dpi=150)
+    # [1차]: 통합 Figure를 닫습니다.
+    # [2차]: 도화지를 치웁니다.
+    plt.close(fig_all)
+    # [1차]: 통합 이미지 경로를 리스트 맨 앞에 삽입합니다.
+    # [2차]: 파노라마 사진 주소를 목록 맨 앞에 추가합니다.
+    saved_paths.insert(0, str(all_path))
+    # [1차]: 저장된 모든 PNG 경로 리스트를 반환합니다.
+    # [2차]: 완성된 사진 주소 목록을 돌려줍니다.
+    return saved_paths
+
+
+# [1차]: Power Iteration으로 정방 행렬의 최대 고유값과 대응 단위 고유벡터를 반복 계산합니다.
+# [2차]: 행렬을 계속 곱하고 길이를 1로 줄이는 과정을 반복해 '가장 세게 늘어나는 주력 방향과 배율'을 찾습니다.
+def power_iteration(
+    matrix: np.ndarray,
+    num_iters: int = 1000,
+    tol: float = 1e-9,
+    seed: int = 42,
+) -> Tuple[float, np.ndarray]:
+    """Power Iteration 알고리즘으로 정방 행렬의 최대 고유값과 대응 고유벡터를 계산합니다.
+
+    수식:
+        b_{k+1} = (A @ b_k) / ||A @ b_k||_2
+        lambda_max = (b_k^T @ A @ b_k) / (b_k^T @ b_k)  (Rayleigh quotient)
+
+    Args:
+        matrix: (N, N) 정방 행렬.
+        num_iters: 최대 반복 횟수.
+        tol: 수렴 판정 임계값.
+        seed: 초기 벡터 생성을 위한 난수 시드.
+
+    Returns:
+        (최대 고유값, 단위 고유벡터) 튜플.
+
+    Raises:
+        ValueError: 정방 행렬이 아니거나, num_iters <= 0 이거나, 영행렬인 경우.
+    """
+    # [1차]: 입력 matrix를 float64형 NumPy 배열로 변환합니다.
+    # [2차]: 행렬을 계산 가능한 숫자 표로 정리합니다.
+    mat = np.asarray(matrix, dtype=np.float64)
+    # [1차]: 비어 있지 않은 2D 정방 행렬(행 수 == 열 수)인지 검사합니다.
+    # [2차]: 가로·세로 길이가 똑같은 정사각형 행렬이 아니면 거부합니다.
+    if mat.ndim != 2 or mat.shape[0] != mat.shape[1] or mat.shape[0] == 0:
+        # [1차]: 정방 행렬이 아닐 때 ValueError를 발생시킵니다.
+        # [2차]: 정사각형 행렬만 넣으라고 알립니다.
+        raise ValueError("Power Iteration에는 비어 있지 않은 정방 행렬이 필요합니다.")
+    # [1차]: 최대 반복 횟수가 1 이상인지 확인합니다.
+    # [2차]: 0번 이하로 반복할 순 없으니 막습니다.
+    if num_iters <= 0:
+        # [1차]: num_iters <= 0이면 ValueError를 발생시킵니다.
+        # [2차]: 최소 1회 이상 반복하라고 안내합니다.
+        raise ValueError("num_iters는 1 이상이어야 합니다.")
+    # [1차]: 모든 원소가 0인 영행렬인지 검사합니다.
+    # [2차]: 전부 0뿐인 행렬은 곱하면 화살표가 사라지므로 미리 차단합니다.
+    if np.allclose(mat, 0.0):
+        # [1차]: 영행렬 입력 시 ValueError를 발생시킵니다.
+        # [2차]: "영행렬에는 적용할 수 없습니다"라고 알립니다.
+        raise ValueError("영행렬(Zero Matrix)에는 Power Iteration을 적용할 수 없습니다.")
+
+    # [1차]: 실험 재현성을 위해 난수 시드를 고정합니다.
+    # [2차]: 언제 실행해도 똑같은 출발 화살표가 나오도록 주사위를 고정합니다.
+    np.random.seed(seed)
+    # [1차]: 행렬의 차원 크기 N을 추출합니다.
+    # [2차]: 화살표의 칸 수(차원)를 확인합니다.
+    n = mat.shape[0]
+    # [1차]: [0, 1) 범위의 난수로 초기 벡터 b를 생성합니다.
+    # [2차]: 아무 방향이나 가리키는 임시 화살표를 하나 뽑습니다.
+    b = np.random.rand(n)
+    # [1차]: 초기 벡터의 L2 노름(길이)을 계산합니다.
+    # [2차]: 화살표 길이를 잽니다.
+    norm_b = np.linalg.norm(b)
+    # [1차]: 우연히 영벡터가 나왔을 경우 [1, 1, ...] 벡터로 대체하는 방어 로직입니다.
+    # [2차]: 혹시 길이가 0짜리 화살표가 뽑히면 안전한 [1, 1, ...] 화살표로 바꿉니다.
+    if norm_b == 0.0:
+        # [1차]: 모든 성분이 1인 벡터를 생성합니다.
+        # [2차]: 안전한 화살표를 새로 만듭니다.
+        b = np.ones(n, dtype=np.float64)
+        # [1차]: 새 벡터의 길이를 다시 계산합니다.
+        # [2차]: 길이를 다시 잽니다.
+        norm_b = np.linalg.norm(b)
+    # [1차]: 초기 벡터를 단위 벡터(||b||=1)로 정규화합니다.
+    # [2차]: 길이를 딱 1로 줄여 표준 화살표로 만듭니다.
+    b = b / norm_b
+
+    # [1차]: 이전 스텝 고유값 비교를 위한 초기값 0.0을 설정합니다.
+    # [2차]: 직전 배율 기록을 0으로 초기화합니다.
+    eigenvalue = 0.0
+    # [1차]: 최대 num_iters회 Power Iteration 루프를 실행합니다.
+    # [2차]: 화살표가 주력 방향에 딱 멈출 때까지 반복합니다.
+    for _ in range(num_iters):
+        # [1차]: 행렬-벡터 곱 A @ b를 수행합니다.
+        # [2차]: 화살표에 행렬 바람을 한 번 불어줍니다.
+        b_next = mat @ b
+        # [1차]: 변환된 벡터의 L2 노름을 계산합니다.
+        # [2차]: 늘어난 화살표의 길이를 잽니다.
+        norm_next = np.linalg.norm(b_next)
+        # [1차]: 변환 후 영벡터가 되면 0 나눗셈을 막기 위해 루프를 종료합니다.
+        # [2차]: 화살표 길이가 0으로 쪼그라들면 안전하게 멈춥니다.
+        if norm_next == 0.0:
+            break
+        # [1차]: 길이를 1로 정규화해 다음 단위 벡터 b_next를 얻습니다.
+        # [2차]: 숫자가 폭발하지 않게 다시 길이 1짜리 표준 화살표로 줄입니다.
+        b_next = b_next / norm_next
+        # [1차]: Rayleigh Quotient (b^T @ A @ b)로 현재 고유값을 추정합니다.
+        # [2차]: 이 화살표가 원래 방향으로 몇 배 늘어났는지 배율(고유값)을 잽니다.
+        new_eigenvalue = float(b_next.T @ mat @ b_next)
+
+        # [1차]: 고유값 변화와 고유벡터 변화가 모두 tol 미만이면 수렴으로 판정해 조기 종료합니다.
+        # [2차]: 화살표 방향과 배율이 거의 변하지 않고 딱 멈추면 정답을 찾은 것이므로 종료합니다.
+        if np.abs(new_eigenvalue - eigenvalue) < tol and np.linalg.norm(b_next - b) < tol:
+            # [1차]: 최종 벡터와 고유값을 갱신하고 루프를 탈출합니다.
+            # [2차]: 최종 값을 확정 짓고 반복문을 빠져나갑니다.
+            b = b_next
+            eigenvalue = new_eigenvalue
+            break
+
+        # [1차]: 다음 반복을 위해 현재 벡터와 고유값을 갱신합니다.
+        # [2차]: 방금 구한 화살표와 배율을 현재 값으로 업데이트합니다.
+        b = b_next
+        eigenvalue = new_eigenvalue
+
+    # [1차]: 수렴된 최대 고유값과 단위 고유벡터를 튜플로 반환합니다.
+    # [2차]: 찾은 최대 배율(고유값)과 주력 방향(고유벡터)을 함께 돌려줍니다.
+    return eigenvalue, b
+
+
+# [1차]: 외부 파일 없이 재현 가능한 64x64 이하 Grayscale 테스트 이미지를 생성합니다.
+# [2차]: 인터넷에서 사진을 받지 않고도 SVD 압축 실험을 할 수 있는 64x64 흑백 그림을 직접 그립니다.
+def create_sample_grayscale_image(size: int = 64) -> np.ndarray:
+    """재현 가능한 64x64 이하 Grayscale 테스트 이미지를 생성합니다.
+
+    Args:
+        size: 이미지 한 변의 픽셀 크기 (1 ~ 64).
+
+    Returns:
+        0~255 범위의 float64 (size, size) Grayscale 이미지 배열.
+
+    Raises:
+        ValueError: size가 1 미만이거나 64 초과일 때 발생.
+    """
+    # [1차]: 과제 제약 조건(64x64 이하)을 검증합니다.
+    # [2차]: 크기가 1 미만이거나 64를 넘으면 규격 위반이므로 막습니다.
+    if size < 1 or size > 64:
+        # [1차]: 범위를 벗어난 size에 대해 ValueError를 발생시킵니다.
+        # [2차]: "64x64 이하만 가능합니다"라고 알립니다.
+        raise ValueError("이미지는 64x64 이하(1 <= size <= 64)여야 합니다.")
+
+    # [1차]: 재현성을 위해 시드 42를 고정합니다.
+    # [2차]: 항상 동일한 테스트 그림이 나오도록 시드를 맞춥니다.
+    np.random.seed(42)
+    # [1차]: 브로드캐스팅 가능한 열린 격자 인덱스(ogrid)를 생성합니다.
+    # [2차]: 세로 줄번호(y)와 가로 칸번호(x) 자를 준비합니다.
+    y_idx, x_idx = np.ogrid[:size, :size]
+    # [1차]: 이미지 중심 좌표를 계산합니다.
+    # [2차]: 캔버스 한가운데 좌표를 찾습니다.
+    center = size / 2.0
+    # [1차]: 중앙 원 패턴의 반지름을 계산합니다.
+    # [2차]: 가운데 그릴 동그라미의 반지름을 정합니다.
+    radius = size / 3.0
+
+    # [1차]: 대각선 방향 그라데이션(0~140 밝기)을 생성합니다.
+    # [2차]: 왼쪽 위에서 오른쪽 아래로 서서히 밝아지는 배경을 칠합니다.
+    gradient = (x_idx + y_idx) / (2.0 * size) * 140.0
+    # [1차]: 중심으로부터 거리가 radius 이하인 픽셀들의 불리언 마스크를 만듭니다.
+    # [2차]: 가운데 동그라미 영역에 해당하는 픽셀만 골라내는 스텐실(틀)을 만듭니다.
+    circle_mask = ((x_idx - center) ** 2 + (y_idx - center) ** 2) <= radius ** 2
+    # [1차]: 8픽셀 간격의 체커보드(바둑판) 명암 패턴을 생성합니다.
+    # [2차]: 8칸마다 흑백이 교차하는 체스판 무늬를 만듭니다.
+    checker = (((x_idx // 8) + (y_idx // 8)) % 2) * 55.0
+
+    # [1차]: 배경 그라데이션과 체커보드 패턴을 합칩니다.
+    # [2차]: 배경 위에 체스판 무늬를 은은하게 덧칠합니다.
+    img = gradient + checker
+    # [1차]: 원형 마스크 영역의 밝기를 반전시켜 뚜렷한 원형 피사체를 그립니다.
+    # [2차]: 가운데 동그라미 안쪽 색을 반전시켜 또렷한 도형을 넣습니다.
+    img[circle_mask] = 220.0 - 0.5 * img[circle_mask]
+    # [1차]: 픽셀 값을 0~255 범위로 클리핑해 float64 배열로 반환합니다.
+    # [2차]: 밝기가 0~255 범위를 벗어나지 않게 다듬어 완성된 흑백 그림을 돌려줍니다.
+    return np.clip(img, 0.0, 255.0).astype(np.float64)
+
+
+# [1차]: np.linalg.svd로 이미지를 분해한 뒤 상위 k개 특이값만으로 이미지를 복원하고 오차를 계산합니다.
+# [2차]: 그림에서 가장 중요한 핵심 붓터치 k개만 남기고 나머지는 버려서 압축한 뒤 다시 복원해봅니다.
+def svd_compress_reconstruct(
+    image: np.ndarray,
+    k: int,
+) -> Tuple[np.ndarray, float, float]:
+    """SVD를 사용하여 Grayscale 이미지를 상위 k개 특이값으로 압축 및 복원합니다.
+
+    수식:
+        A = U @ Sigma @ V^T
+        A_k = U[:, :k] @ diag(S[:k]) @ V^T[:k, :]
+
+    Args:
+        image: (H, W) 2D Grayscale 이미지 배열.
+        k: 유지할 특이값 개수 (1 이상).
+
+    Returns:
+        (복원 이미지, 압축률(원본 대비 저장 파라미터 비율), 복원 MSE) 튜플.
+
+    Raises:
+        ValueError: image가 2D가 아니거나 k <= 0일 때 발생.
+    """
+    # [1차]: 입력 image를 float64형 NumPy 배열로 변환합니다.
+    # [2차]: 그림 데이터를 숫자 표로 정리합니다.
+    img = np.asarray(image, dtype=np.float64)
+    # [1차]: 이미지가 2차원 흑백 배열인지 검사합니다.
+    # [2차]: 가로×세로 2차원 흑백 사진이 아니면 거부합니다.
+    if img.ndim != 2:
+        # [1차]: 2D가 아닐 때 ValueError를 발생시킵니다.
+        # [2차]: 2D 흑백 이미지로 넣으라고 알립니다.
+        raise ValueError("SVD 압축을 위해 image는 2D (H, W) 배열이어야 합니다.")
+    # [1차]: 유지할 특이값 개수 k가 1 이상인지 검증합니다.
+    # [2차]: 0개 이하의 붓터치로는 그림을 그릴 수 없으므로 막습니다.
+    if k <= 0:
+        # [1차]: k <= 0일 때 ValueError를 발생시킵니다.
+        # [2차]: 최소 1개 이상의 k를 입력하라고 알립니다.
+        raise ValueError("유지할 특이값 개수 k는 1 이상이어야 합니다.")
+
+    # [1차]: 이미지의 높이(h)와 너비(w)를 추출합니다.
+    # [2차]: 캔버스의 세로·가로 픽셀 수를 확인합니다.
+    h, w = img.shape
+    # [1차]: 축소형 SVD(full_matrices=False)로 U, 특이값 S, V^T를 분해합니다.
+    # [2차]: 그림을 '가로 패턴(u)', '중요도 점수(s)', '세로 패턴(vt)' 세 서랍으로 쪼갭니다.
+    u, s, vt = np.linalg.svd(img, full_matrices=False)
+    # [1차]: 요청한 k가 최대 특이값 개수 len(s)를 넘지 않도록 보정합니다.
+    # [2차]: 전체가 64개뿐인데 100개를 요청하면 있는 64개 전부만 쓰도록 안전하게 맞춥니다.
+    k_eff = min(k, len(s))
+
+    # [1차]: 상위 k_eff개 성분만 슬라이싱·브로드캐스팅 곱셈해 근사 행렬을 복원합니다.
+    # [2차]: 점수 높은 상위 k개 붓터치만 골라 다시 캔버스에 겹쳐 그림을 복원합니다.
+    reconstructed = (u[:, :k_eff] * s[:k_eff]) @ vt[:k_eff, :]
+    # [1차]: 복원된 픽셀 값을 유효 범위 [0, 255]로 클리핑합니다.
+    # [2차]: 밝기가 0~255를 살짝 넘은 픽셀을 정상 범위로 다듬습니다.
+    reconstructed = np.clip(reconstructed, 0.0, 255.0)
+
+    # [1차]: 원본 이미지의 총 픽셀 수를 계산합니다.
+    # [2차]: 원본 사진이 차지하는 숫자 개수(예: 64×64 = 4096개)를 셉니다.
+    original_params = float(h * w)
+    # [1차]: Rank-k 저장에 필요한 파라미터 수 k*(h + w + 1)를 계산합니다.
+    # [2차]: 압축 후 저장해야 할 핵심 숫자 개수를 셉니다.
+    compressed_params = float(k_eff * (h + w + 1))
+    # [1차]: 원본 대비 압축 파라미터 비율을 계산합니다.
+    # [2차]: 원본 대비 몇 배 크기인지 저장 비율을 구합니다.
+    storage_ratio = compressed_params / original_params
+    # [1차]: 원본과 복원 이미지 간의 평균 제곱 오차(MSE)를 계산합니다.
+    # [2차]: 원본과 복원 그림이 픽셀당 평균 얼마나 차이 나는지(화질 손실)를 잽니다.
+    mse = float(np.mean((img - reconstructed) ** 2))
+    # [1차]: (복원 이미지, 저장 비율, MSE) 튜플을 반환합니다.
+    # [2차]: 복원된 그림, 압축 비율, 화질 오차 세 가지를 한꺼번에 돌려줍니다.
+    return reconstructed, storage_ratio, mse
+
+
+# [1차]: 원본과 k=10, 50, 100 복원 결과를 1행 서브플롯으로 비교해 PNG로 저장합니다.
+# [2차]: 원본 사진 옆에 k=10, 50, 100으로 복원한 사진을 나란히 붙여 화질 차이를 보여줍니다.
+def visualize_svd_compression(
+    image: Optional[np.ndarray] = None,
+    ks: Sequence[int] = (10, 50, 100),
+    output_dir: str = "outputs",
+) -> str:
+    """SVD 이미지 압축 및 복원 결과(k=10, 50, 100)를 하나의 Figure에 비교 출력합니다.
+
+    Args:
+        image: (H, W) Grayscale 이미지 (None이면 64x64 기본 이미지 생성).
+        ks: 비교할 k 값 시퀀스.
+        output_dir: PNG 저장 디렉토리.
+
+    Returns:
+        저장된 PNG 파일 경로 문자열.
+    """
+    # [1차]: 출력 디렉토리 Path 객체를 생성합니다.
+    # [2차]: 저장 폴더 주소를 준비합니다.
+    out_path = Path(output_dir)
+    # [1차]: 폴더가 없으면 생성합니다.
+    # [2차]: 보관함 폴더가 없으면 새로 만듭니다.
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    # [1차]: image가 None이면 기본 64x64 이미지를 생성하고, 아니면 float64 배열로 변환합니다.
+    # [2차]: 외부 그림이 없으면 기본 64x64 테스트 그림을 만들어 씁니다.
+    img = create_sample_grayscale_image(64) if image is None else np.asarray(image, dtype=np.float64)
+    # [1차]: 원본(1) + 비교할 k 개수만큼 전체 서브플롯 수를 계산합니다.
+    # [2차]: 원본 1칸 + 압축 버전 3칸, 총 4칸짜리 액자를 준비합니다.
+    n_plots = 1 + len(ks)
+    # [1차]: 1행 n_plots열 크기의 Figure와 Axes 배열을 생성합니다.
+    # [2차]: 4장의 사진을 가로로 나란히 걸 액자를 펼칩니다.
+    fig, axes = plt.subplots(1, n_plots, figsize=(4 * n_plots, 4.5))
+
+    # [1차]: 첫 번째 칸에 원본 이미지를 흑백(gray) 컬러맵으로 출력합니다.
+    # [2차]: 맨 왼쪽 첫 번째 액자에 원본 사진을 걸어둡니다.
+    axes[0].imshow(img, cmap="gray", vmin=0, vmax=255)
+    # [1차]: 원본 이미지의 해상도를 제목으로 표시합니다.
+    # [2차]: "원본 (64x64)" 이름표를 붙입니다.
+    axes[0].set_title(f"Original ({img.shape[0]}x{img.shape[1]})")
+    # [1차]: 이미지 출력 시 불필요한 축 눈금을 숨깁니다.
+    # [2차]: 사진 테두리의 숫자 눈금을 깔끔히 지웁니다.
+    axes[0].axis("off")
+
+    # [1차]: k 시퀀스를 1번 인덱스부터 순회하며 압축·복원 이미지를 그립니다.
+    # [2차]: k=10, 50, 100 버전을 순서대로 액자에 채웁니다.
+    for idx, k in enumerate(ks, start=1):
+        # [1차]: 해당 k로 SVD 압축 및 복원을 수행합니다.
+        # [2차]: 상위 k개 붓터치만으로 그림을 복원하고 오차를 잽니다.
+        recon, ratio, mse = svd_compress_reconstruct(img, k)
+        # [1차]: idx번째 칸에 복원 이미지를 출력합니다.
+        # [2차]: 해당 액자에 복원된 사진을 겁니다.
+        axes[idx].imshow(recon, cmap="gray", vmin=0, vmax=255)
+        # [1차]: k값, MSE, 저장 비율을 제목에 표시합니다.
+        # [2차]: "k=10일 때 오차(MSE)는 얼마"라고 이름표를 붙입니다.
+        axes[idx].set_title(f"SVD k={k}\nMSE={mse:.2f}, Ratio={ratio:.2f}")
+        # [1차]: 축 눈금을 숨깁니다.
+        # [2차]: 테두리 눈금을 지웁니다.
+        axes[idx].axis("off")
+
+    # [1차]: 저장 경로(output_dir/la_svd_compression.png)를 조합합니다.
+    # [2차]: 완성된 비교 사진의 파일 이름을 정합니다.
+    save_path = out_path / "la_svd_compression.png"
+    # [1차]: 전체 Figure 상단 제목을 설정합니다.
+    # [2차]: 맨 위에 큰 제목 간판을 달아줍니다.
+    fig.suptitle("SVD Grayscale Image Compression (k=10, 50, 100)", fontsize=13, fontweight="bold")
+    # [1차]: 서브플롯 간 여백을 자동 조정합니다.
+    # [2차]: 사진들이 겹치지 않게 간격을 맞춥니다.
+    fig.tight_layout()
+    # [1차]: 150 DPI PNG로 저장합니다.
+    # [2차]: 사진 파일로 인화합니다.
+    fig.savefig(save_path, dpi=150)
+    # [1차]: Figure를 닫아 메모리를 해제합니다.
+    # [2차]: 다 그린 도화지를 치웁니다.
+    plt.close(fig)
+    # [1차]: 저장된 파일 경로 문자열을 반환합니다.
+    # [2차]: 사진 주소를 알려주며 마칩니다.
+    return str(save_path)
+
+
+################################################################################
+# FILE: src/calculus.py
+################################################################################
+
+"""미적분(Calculus) 수치 미분 및 Gradient 시각화 모듈.
+
+포함 기능:
+- 중심차분법(Central Difference) 기반 1변수 수치 미분 함수
+- 중심차분법 기반 다변수 함수 Gradient 벡터 계산 함수
+- f(x, y) = x^2 + y^2 등고선 및 Gradient 화살표 수직성 시각화
+"""
+
+# [1차]: 파일 시스템 경로를 객체지향적으로 다루기 위해 pathlib의 Path 클래스를 임포트합니다.
+# [2차]: 문자열 경로("outputs/...") 대신 폴더와 파일을 안전하게 조립하는 만능 주소록 도구를 꺼냅니다.
+from pathlib import Path
+# [1차]: 함수 타입 힌트(Callable)를 명시하기 위해 typing 모듈에서 임포트합니다.
+# [2차]: "이 자리에는 숫자나 글자가 아니라 실행할 수 있는 함수가 들어온다"는 표지판을 준비합니다.
+from typing import Callable
+
+# [1차]: Matplotlib 핵심 패키지를 임포트합니다.
+# [2차]: 수학 그래프를 그릴 도화지와 붓 세트를 책상 위에 올려둡니다.
+import matplotlib
+# [1차]: GUI 창을 띄우지 않고 파일로만 렌더링하도록 백엔드를 'Agg'로 설정합니다.
+# [2차]: 모니터 화면에 창을 팝업으로 띄우지 않고 조용히 사진 파일(.png)로만 인화하도록 설정합니다.
+matplotlib.use("Agg")
+# [1차]: 그래프 생성을 위한 pyplot 서브모듈을 plt 별칭으로 임포트합니다.
+# [2차]: 도화지에 선을 긋고 제목을 적는 간편한 그림판 리모컨을 plt라는 짧은 이름으로 부릅니다.
+import matplotlib.pyplot as plt
+# [1차]: 수치 연산 라이브러리 NumPy를 np 별칭으로 임포트합니다.
+# [2차]: 벡터와 행렬 계산을 순식간에 처리하는 공학용 계산기를 np라는 이름으로 불러옵니다.
+import numpy as np
+
+
+# [1차]: 스칼라 함수 func, 지점 x, 미소 간격 h(기본 1e-5)를 받아 float를 반환하는 함수를 정의합니다.
+# [2차]: 어떤 곡선이든 x 위치에서 앞뒤로 살짝 움직여 기울기를 재는 '만능 경사 측정기'를 만듭니다.
+def numerical_derivative(
+    func: Callable[[float], float],
+    x: float,
+    h: float = 1e-5,
+) -> float:
+    """중심차분법(Central Difference)으로 1변수 함수의 수치 미분 값을 계산합니다.
+
+    수식:
+        f'(x) ≈ (f(x + h) - f(x - h)) / (2 * h)
+
+    Args:
+        func: 미분할 스칼라 함수 f(x).
+        x: 미분 계수를 구할 지점.
+        h: 미소 변화량 (양수, 기본값 1e-5).
+
+    Returns:
+        x에서의 근사 미분 계수 f'(x).
+
+    Raises:
+        ValueError: h <= 0 일 때 발생.
+    """
+    # [1차]: 보폭 h가 0 이하인지 검사하여 0 나눗셈 및 부호 반전을 방지합니다.
+    # [2차]: 보폭이 0이거나 마이너스면 경사를 잴 수 없으므로 입구에서 즉시 경고벨을 울립니다.
+    if h <= 0.0:
+        # [1차]: 잘못된 인자 입력에 대해 ValueError 예외를 발생시킵니다.
+        # [2차]: "h는 반드시 양수여야 합니다!"라고 안내문을 띄우며 작업을 중단합니다.
+        raise ValueError("미소 변화량 h는 0보다 큰 양수여야 합니다.")
+    # [1차]: 입력 x를 배정밀도 실수(float)로 명시적 형변환합니다.
+    # [2차]: 정수 3이 들어와도 소수점 계산이 매끄럽도록 실수 3.0으로 깔끔히 다듬습니다.
+    x_val = float(x)
+    # [1차]: (f(x+h) - f(x-h)) / (2*h) 중심차분 공식을 계산해 float로 반환합니다.
+    # [2차]: 현재 위치에서 앞(x+h)과 뒤(x-h)의 높이 차이를 양쪽 보폭 합(2h)으로 나누어 정확한 기울기를 구합니다.
+    return float((func(x_val + h) - func(x_val - h)) / (2.0 * h))
+
+
+# [1차]: 다변수 함수 func, 1D 좌표 배열 point, 미소 간격 h를 받아 Gradient 벡터를 반환합니다.
+# [2차]: 산의 2차원·3차원 좌표 위에서 동서남북 어느 쪽이 가장 가파른 오르막인지 화살표를 구하는 함수입니다.
+def numerical_gradient(
+    func: Callable[[np.ndarray], float],
+    point: np.ndarray,
+    h: float = 1e-5,
+) -> np.ndarray:
+    """중심차분법으로 다변수 스칼라 함수의 Gradient 벡터를 계산합니다.
+
+    수식:
+        grad_i f(p) ≈ (f(p + h * e_i) - f(p - h * e_i)) / (2 * h)
+
+    Args:
+        func: D차원 벡터를 입력받아 스칼라를 반환하는 함수.
+        point: Gradient를 계산할 1D 좌표 배열 (D,).
+        h: 미소 변화량 (양수, 기본값 1e-5).
+
+    Returns:
+        입력 point와 동일한 shape을 가진 Gradient 벡터.
+
+    Raises:
+        ValueError: h <= 0 이거나 point가 비어 있는 경우.
+    """
+    # [1차]: h가 양수인지 검증하는 가드 조건문입니다.
+    # [2차]: 보폭이 0 이하이면 측정이 불가능하므로 먼저 차단합니다.
+    if h <= 0.0:
+        # [1차]: h <= 0일 때 ValueError를 발생시킵니다.
+        # [2차]: 잘못된 보폭 입력 시 즉시 오류 메시지를 전달합니다.
+        raise ValueError("미소 변화량 h는 0보다 큰 양수여야 합니다.")
+    # [1차]: 입력 point를 float64형 NumPy 배열로 변환하고 원본 보호를 위해 복사(.copy())합니다.
+    # [2차]: 원본 좌표 지도가 훼손되지 않도록 똑같은 사본을 한 장 복사해둡니다.
+    p = np.asarray(point, dtype=np.float64).copy()
+    # [1차]: p가 1차원 벡터가 아니거나 원소 수가 0개인 경우를 검사합니다.
+    # [2차]: 좌표가 아예 비어 있거나 1줄짜리 벡터가 아니면 계산을 거부합니다.
+    if p.ndim != 1 or p.size == 0:
+        # [1차]: 유효하지 않은 벡터 형태에 대해 ValueError를 발생시킵니다.
+        # [2차]: "비어 있지 않은 1차원 좌표만 넣으세요"라고 알려줍니다.
+        raise ValueError("point는 비어 있지 않은 1차원 벡터여야 합니다.")
+
+    # [1차]: p와 동일한 크기(shape)의 0으로 채워진 float64 배열 grad를 생성합니다.
+    # [2차]: 각 방향별 기울기를 적어 넣을 빈 성적표(0으로 초기화)를 준비합니다.
+    grad = np.zeros_like(p, dtype=np.float64)
+    # [1차]: 0부터 벡터 차원 수(p.size) - 1까지 인덱스를 순회합니다.
+    # [2차]: x축, y축 등 각 방향을 한 번씩 순서대로 점검합니다.
+    for i in range(p.size):
+        # [1차]: i번째 좌표의 원래 값을 임시 변수 orig에 백업합니다.
+        # [2차]: 발을 옮기기 전 현재 서 있는 위치를 분필로 표시해둡니다.
+        orig = p[i]
+        # [1차]: i번째 원소를 +h만큼 이동시킵니다.
+        # [2차]: 해당 축으로 아주 조금(+h) 앞으로 발을 내딛습니다.
+        p[i] = orig + h
+        # [1차]: 이동된 좌표에서 함수값을 평가하여 float로 저장합니다.
+        # [2차]: 앞쪽 지점의 산 높이를 잽니다.
+        f_plus = float(func(p))
+        # [1차]: i번째 원소를 기준점으로부터 -h만큼 이동시킵니다.
+        # [2차]: 이번엔 뒤쪽(-h)으로 똑같은 보폭만큼 발을 내딛습니다.
+        p[i] = orig - h
+        # [1차]: 음의 방향 좌표에서 함수값을 평가하여 float로 저장합니다.
+        # [2차]: 뒤쪽 지점의 산 높이를 잽니다.
+        f_minus = float(func(p))
+        # [1차]: 다음 축 계산에 영향을 주지 않도록 i번째 원소를 원래 값으로 복원합니다.
+        # [2차]: 다음 축을 재기 전에 반드시 원래 제자리로 돌아옵니다.
+        p[i] = orig
+        # [1차]: 중심차분 공식으로 i번째 편미분 값을 계산해 grad[i]에 저장합니다.
+        # [2차]: (앞 높이 - 뒤 높이) ÷ 2h로 이 방향의 기울기를 성적표에 기록합니다.
+        grad[i] = (f_plus - f_minus) / (2.0 * h)
+    # [1차]: 모든 축의 편미분이 채워진 Gradient 벡터 grad를 반환합니다.
+    # [2차]: 각 축의 기울기를 모은 최종 '가장 가파른 오르막 화살표'를 돌려줍니다.
+    return grad
+
+
+# [1차]: 2차원 좌표 배열 point를 받아 x^2 + y^2 스칼라 값을 반환하는 테스트 함수입니다.
+# [2차]: 원점이 가장 낮고 바깥으로 갈수록 둥글게 높아지는 밥그릇 모양 함수입니다.
+def quadratic_2d(point: np.ndarray) -> float:
+    """테스트용 2변수 2차 함수 f(x, y) = x^2 + y^2."""
+    # [1차]: 첫 번째 원소의 제곱과 두 번째 원소의 제곱을 더해 float로 반환합니다.
+    # [2차]: x좌표 제곱과 y좌표 제곱을 합쳐 현재 위치의 높이를 계산합니다.
+    return float(point[0] ** 2 + point[1] ** 2)
+
+
+# [1차]: 등고선 그래프와 Gradient 화살표를 그려 output_dir에 PNG로 저장하는 함수입니다.
+# [2차]: 등고선 지도 위에 화살표를 그려서 기울기가 등고선과 90도 수직임을 눈으로 확인시켜 줍니다.
+def visualize_gradient_field(output_dir: str = "outputs") -> str:
+    """f(x, y) = x^2 + y^2 등고선과 등고선 위 여러 점의 Gradient 화살표를 시각화합니다.
+
+    등고선과 Gradient 벡터가 항상 직교(수직)함을 확인하기 위해 축 비율을 1:1로 고정합니다.
+
+    Args:
+        output_dir: 결과 PNG 파일을 저장할 디렉토리 경로.
+
+    Returns:
+        저장된 PNG 파일 경로 문자열.
+    """
+    # [1차]: 출력 디렉토리 문자열을 Path 객체로 변환합니다.
+    # [2차]: 그림을 저장할 폴더 주소를 Path 객체로 만듭니다.
+    out_path = Path(output_dir)
+    # [1차]: 폴더가 없으면 상위 폴더까지 포함해 생성하고, 이미 있어도 에러를 내지 않습니다.
+    # [2차]: 보관함 폴더가 없으면 새로 만들고, 이미 있으면 그대로 씁니다.
+    out_path.mkdir(parents=True, exist_ok=True)
+    # [1차]: 그래프에서 마이너스(-) 기호가 깨지지 않도록 유니코드 마이너스 옵션을 끕니다.
+    # [2차]: 음수 눈금이 네모(□)로 깨지지 않게 안전장치를 겁니다.
+    plt.rcParams["axes.unicode_minus"] = False
+
+    # [1차]: -3.0부터 3.0까지 200개의 균등 간격 좌표를 생성합니다.
+    # [2차]: 가로·세로 눈금을 촘촘하게 200칸으로 나눕니다.
+    grid_vals = np.linspace(-3.0, 3.0, 200)
+    # [1차]: 1차원 좌표 배열로 2차원 평면 격자(gx, gy)를 생성합니다.
+    # [2차]: 바둑판처럼 가로줄과 세로줄이 만나는 모든 교차점 좌표를 만듭니다.
+    gx, gy = np.meshgrid(grid_vals, grid_vals)
+    # [1차]: 각 격자점에서의 함숫값 z = x^2 + y^2를 벡터화 연산으로 계산합니다.
+    # [2차]: 바둑판 위 모든 점의 높이(x²+y²)를 한 번에 계산합니다.
+    gz = gx ** 2 + gy ** 2
+
+    # [1차]: 7x7 인치 크기의 Figure와 Axes 객체를 생성합니다.
+    # [2차]: 정사각형 7x7 크기의 도화지를 펼칩니다.
+    fig, ax = plt.subplots(figsize=(7, 7))
+    # [1차]: 등고선으로 표시할 높이 레벨 리스트를 정의합니다.
+    # [2차]: 높이가 1, 2, 4, 6, 9인 지점을 따라 등고선 테두리를 그릴 준비를 합니다.
+    levels = [1.0, 2.0, 4.0, 6.0, 9.0]
+    # [1차]: 등고선 그래프를 그리고 반환 객체를 contour에 저장합니다.
+    # [2차]: 지도에 둥근 등고선들을 진한 남색 선으로 그립니다.
+    contour = ax.contour(gx, gy, gz, levels=levels, colors="#2c3e50", linewidths=1.5)
+    # [1차]: 각 등고선 위에 높이 숫자 라벨을 인라인으로 표시합니다.
+    # [2차]: 등고선마다 "여기는 높이 f=4"라고 꼬리표를 붙여줍니다.
+    ax.clabel(contour, inline=True, fontsize=9, fmt="f=%.0f")
+
+    # [1차]: 0부터 2*pi까지 12등분한 각도 배열을 생성합니다(끝점 2*pi 제외).
+    # [2차]: 시계 문자판 12시간처럼 원 둘레를 12방향으로 나눕니다.
+    sample_angles = np.linspace(0.0, 2.0 * np.pi, 12, endpoint=False)
+    # [1차]: 화살표를 그릴 두 개의 반지름(1.0, 2.0) 리스트를 정의합니다.
+    # [2차]: 안쪽 원(반지름 1)과 바깥쪽 원(반지름 2) 위에서 화살표를 그려볼 것입니다.
+    sample_radii = [1.0, 2.0]
+    # [1차]: 점 좌표(px, py)와 기울기 벡터 성분(ux, uy)을 담을 빈 리스트 4개를 초기화합니다.
+    # [2차]: 화살표 시작점과 방향을 기록할 빈 바구니 4개를 준비합니다.
+    px_list, py_list, ux_list, uy_list = [], [], [], []
+    # [1차]: 각 반지름 r에 대해 반복합니다.
+    # [2차]: 안쪽 원부터 바깥쪽 원 순서로 돕니다.
+    for r in sample_radii:
+        # [1차]: 각 각도 ang에 대해 반복합니다.
+        # [2차]: 12시 방향부터 시계 방향으로 한 점씩 방문합니다.
+        for ang in sample_angles:
+            # [1차]: 극좌표 (r, ang)를 직교좌표 [r*cos, r*sin] NumPy 배열로 변환합니다.
+            # [2차]: 각도와 반지름을 (x, y) 위치 좌표로 바꿉니다.
+            pt = np.array([r * np.cos(ang), r * np.sin(ang)], dtype=np.float64)
+            # [1차]: 해당 좌표 pt에서의 수치 Gradient 벡터를 계산합니다.
+            # [2차]: 이 점에 서 있을 때 가장 가파른 오르막 방향 화살표를 계산합니다.
+            grad = numerical_gradient(quadratic_2d, pt)
+            # [1차]: x좌표를 px_list에 추가합니다.
+            # [2차]: 화살표 시작 x위치를 기록합니다.
+            px_list.append(pt[0])
+            # [1차]: y좌표를 py_list에 추가합니다.
+            # [2차]: 화살표 시작 y위치를 기록합니다.
+            py_list.append(pt[1])
+            # [1차]: Gradient의 x성분을 ux_list에 추가합니다.
+            # [2차]: 화살표의 가로 방향 크기를 기록합니다.
+            ux_list.append(grad[0])
+            # [1차]: Gradient의 y성분을 uy_list에 추가합니다.
+            # [2차]: 화살표의 세로 방향 크기를 기록합니다.
+            uy_list.append(grad[1])
+
+    # [1차]: quiver 함수를 사용해 시작점 (px, py)에서 방향 (ux, uy)의 벡터 화살표를 그립니다.
+    # [2차]: 저장해둔 모든 점 위에 빨간색 오르막 화살표를 한꺼번에 꽂아 넣습니다.
+    ax.quiver(
+        px_list,
+        py_list,
+        ux_list,
+        uy_list,
+        color="#e74c3c",
+        angles="xy",
+        scale_units="xy",
+        scale=3.5,
+        width=0.006,
+        label="Gradient Vector (∇f)",
+    )
+    # [1차]: 샘플 좌표 위치에 파란색 산점도 마커를 찍습니다.
+    # [2차]: 화살표가 시작되는 위치에 파란 압정을 콕콕 찍어 표시합니다.
+    ax.scatter(px_list, py_list, color="#2980b9", s=25, zorder=5, label="Sample Points")
+    # [1차]: x축과 y축의 1단위 길이를 동일하게(1:1) 고정해 직교성이 왜곡되지 않게 합니다.
+    # [2차]: 도화지가 찌그러져 90도가 80도처럼 보이지 않도록 가로세로 비율을 딱 1:1로 맞춥니다.
+    ax.set_aspect("equal", adjustable="box")
+    # [1차]: x축 표시 범위를 -3.2 ~ 3.2로 설정합니다.
+    # [2차]: 가로 화면 범위를 -3.2에서 3.2까지로 자릅니다.
+    ax.set_xlim(-3.2, 3.2)
+    # [1차]: y축 표시 범위를 -3.2 ~ 3.2로 설정합니다.
+    # [2차]: 세로 화면 범위도 똑같이 맞춥니다.
+    ax.set_ylim(-3.2, 3.2)
+    # [1차]: 점선 형태의 반투명 격자선을 켭니다.
+    # [2차]: 모눈종이 눈금을 은은하게 깔아줍니다.
+    ax.grid(True, linestyle=":", alpha=0.6)
+    # [1차]: x축 라벨을 'x'로 설정합니다.
+    # [2차]: 가로축 이름표를 붙입니다.
+    ax.set_xlabel("x")
+    # [1차]: y축 라벨을 'y'로 설정합니다.
+    # [2차]: 세로축 이름표를 붙입니다.
+    ax.set_ylabel("y")
+    # [1차]: 그래프 상단 제목을 설정합니다.
+    # [2차]: 그림 맨 위에 제목 간판을 달아줍니다.
+    ax.set_title("Contour Plot & Orthogonal Gradient Vectors of f(x, y) = x^2 + y^2")
+    # [1차]: 우측 상단에 범례 박스를 표시합니다.
+    # [2차]: 빨간 화살표와 파란 점이 무엇인지 설명표를 붙여줍니다.
+    ax.legend(loc="upper right")
+
+    # [1차]: 저장할 파일 경로(output_dir/calc_gradient.png)를 조합합니다.
+    # [2차]: 완성된 사진의 파일 이름을 정합니다.
+    save_path = out_path / "calc_gradient.png"
+    # [1차]: 여백이 겹치지 않도록 레이아웃을 자동 정렬합니다.
+    # [2차]: 제목과 눈금이 잘리지 않게 여백을 깔끔히 정리합니다.
+    fig.tight_layout()
+    # [1차]: 150 DPI 고해상도로 PNG 파일로 저장합니다.
+    # [2차]: 선명한 화질로 사진 파일에 인화합니다.
+    fig.savefig(save_path, dpi=150)
+    # [1차]: 메모리 누수를 막기 위해 Figure 객체를 닫습니다.
+    # [2차]: 다 그린 도화지를 치워 책상(메모리)을 비웁니다.
+    plt.close(fig)
+    # [1차]: 저장된 파일 경로를 문자열로 반환합니다.
+    # [2차]: 사진이 저장된 주소를 알려주며 끝냅니다.
+    return str(save_path)
+
+
+################################################################################
+# FILE: src/optimizer.py
+################################################################################
+
+"""최적화(Optimization) 알고리즘 및 수렴 경로 시각화 모듈.
+
+포함 기능:
+- VanillaGD (기본 경사하강법) 옵티마이저 클래스
+- Momentum (관성 기반 경사하강법) 옵티마이저 클래스
+- f(x, y) = x^2 + y^2 수렴(lr=0.1) 및 발산(lr>=0.5) 시각화
+- f(x, y) = x^2 + y^2 및 타원형 함수 f(x, y) = x^2 + 10y^2 수렴 경로 비교 시각화
+"""
+
+# [1차]: 파일 경로 처리를 위해 pathlib의 Path 클래스를 임포트합니다.
+# [2차]: 결과 그림을 저장할 폴더 주소를 다루기 위해 주소록 도구를 꺼냅니다.
+from pathlib import Path
+# [1차]: 타입 힌트(Callable, List, Optional, Tuple)를 위해 typing 모듈에서 임포트합니다.
+# [2차]: 함수의 입력과 출력 형태를 명확히 알려주는 이름표들을 준비합니다.
+from typing import Callable, List, Optional, Tuple
+
+# [1차]: Matplotlib 핵심 패키지를 임포트합니다.
+# [2차]: 그래프를 그릴 도화지 세트를 꺼냅니다.
+import matplotlib
+# [1차]: 화면 출력 없이 파일로만 렌더링하도록 'Agg' 백엔드를 지정합니다.
+# [2차]: 모니터에 창을 띄우지 않고 바로 그림 파일(.png)로만 인화하게 설정합니다.
+matplotlib.use("Agg")
+# [1차]: pyplot 모듈을 plt 별칭으로 임포트합니다.
+# [2차]: 그래프를 그리는 간편한 리모컨을 plt라고 부릅니다.
+import matplotlib.pyplot as plt
+# [1차]: 수치 연산 라이브러리 NumPy를 np 별칭으로 임포트합니다.
+# [2차]: 벡터 뺄셈과 노름 계산을 빠르게 해주는 공학용 계산기를 불러옵니다.
+import numpy as np
+
+
+# [1차]: 기본 경사하강법(Vanilla Gradient Descent)을 구현한 클래스를 정의합니다.
+# [2차]: 오직 현재 발밑의 경사만 보고 한 걸음씩 내려가는 '정직한 등산객' 클래스입니다.
+class VanillaGD:
+    """기본 경사하강법(Vanilla Gradient Descent) 옵티마이저.
+
+    수식:
+        theta_{t+1} = theta_t - lr * grad(theta_t)
+    """
+
+    # [1차]: 생성자 메서드 __init__에서 학습률 lr(기본 0.1)을 받아 초기화합니다.
+    # [2차]: 등산객이 출발하기 전에 한 걸음 보폭(lr)을 얼마로 할지 정합니다.
+    def __init__(self, lr: float = 0.1) -> None:
+        """VanillaGD 옵티마이저를 초기화합니다.
+
+        Args:
+            lr: 학습률(Learning Rate, 양수).
+
+        Raises:
+            ValueError: lr <= 0 일 때 발생.
+        """
+        # [1차]: 학습률이 0 이하인지 검사하여 역방향 이동이나 정지를 방지합니다.
+        # [2차]: 보폭이 0이거나 음수면 산을 내려갈 수 없으므로 입구에서 막습니다.
+        if lr <= 0.0:
+            # [1차]: 잘못된 학습률에 대해 ValueError 예외를 발생시킵니다.
+            # [2차]: "보폭은 양수여야 합니다"라고 안내문을 띄웁니다.
+            raise ValueError("학습률 lr은 0보다 큰 양수여야 합니다.")
+        # [1차]: 학습률을 float로 변환하여 인스턴스 속성 self.lr에 저장합니다.
+        # [2차]: 정해진 보폭 값을 등산객의 수첩(self.lr)에 적어둡니다.
+        self.lr = float(lr)
+
+    # [1차]: 현재 파라미터 params와 기울기 grads를 받아 한 스텝 업데이트된 파라미터를 반환합니다.
+    # [2차]: 현재 위치에서 경사 반대 방향으로 딱 한 걸음 이동한 다음 좌표를 계산합니다.
+    def step(self, params: np.ndarray, grads: np.ndarray) -> np.ndarray:
+        """단일 업데이트 스텝을 수행합니다.
+
+        Args:
+            params: 현재 파라미터 벡터.
+            grads: 현재 파라미터에 대한 기울기 벡터.
+
+        Returns:
+            업데이트된 파라미터 벡터.
+        """
+        # [1차]: params를 float64형 NumPy 배열로 변환합니다.
+        # [2차]: 현재 좌표를 계산 가능한 숫자 배열로 정리합니다.
+        p = np.asarray(params, dtype=np.float64)
+        # [1차]: grads를 float64형 NumPy 배열로 변환합니다.
+        # [2차]: 현재 위치의 경사(기울기)도 숫자 배열로 정리합니다.
+        g = np.asarray(grads, dtype=np.float64)
+        # [1차]: theta - lr * grad 수식을 벡터화 연산으로 계산해 반환합니다.
+        # [2차]: 오르막 방향(g)의 반대쪽(-g)으로 보폭(lr)만큼 내려간 새 위치를 돌려줍니다.
+        return p - self.lr * g
+
+    # [1차]: 기울기 함수 grad_fn을 이용해 init_params부터 num_steps회 반복 최적화하고 궤적을 반환합니다.
+    # [2차]: 출발점부터 골짜기 바닥까지 100걸음 걸어가는 동안 밟은 발자국을 모두 지도에 기록합니다.
+    def optimize(
+        self,
+        grad_fn: Callable[[np.ndarray], np.ndarray],
+        init_params: np.ndarray,
+        num_steps: int = 100,
+        clip_bound: Optional[float] = 1e6,
+    ) -> np.ndarray:
+        """주어진 기울기 함수에 대해 num_steps만큼 최적화를 수행하고 궤적을 반환합니다.
+
+        Args:
+            grad_fn: 파라미터를 입력받아 기울기 벡터를 반환하는 함수.
+            init_params: 초기 파라미터 벡터.
+            num_steps: 반복 횟수.
+            clip_bound: 발산 시 오버플로우 방지를 위한 궤적 절단 상한 (None이면 미적용).
+
+        Returns:
+            (T+1, D) 형태의 최적화 파라미터 궤적 배열.
+
+        Raises:
+            ValueError: num_steps <= 0 일 때 발생.
+        """
+        # [1차]: 반복 횟수 num_steps가 1 이상인지 검증합니다.
+        # [2차]: 0번 이하로 걷겠다고 하면 의미가 없으므로 오류를 냅니다.
+        if num_steps <= 0:
+            # [1차]: num_steps <= 0이면 ValueError를 발생시킵니다.
+            # [2차]: 최소 한 걸음 이상 걷도록 안내합니다.
+            raise ValueError("num_steps는 1 이상이어야 합니다.")
+
+        # [1차]: 초기 파라미터를 float64 배열로 복사해 현재 위치 변수 current를 초기화합니다.
+        # [2차]: 출발점 좌표를 복사해 등산객의 현재 위치로 삼습니다.
+        current = np.asarray(init_params, dtype=np.float64).copy()
+        # [1차]: 발자국 궤적을 저장할 리스트 history에 시작점을 복사해 넣습니다.
+        # [2차]: 발자국 일기장의 첫 번째 줄에 출발 좌표를 적습니다.
+        history: List[np.ndarray] = [current.copy()]
+
+        # [1차]: num_steps 횟수만큼 파라미터 업데이트 루프를 반복합니다.
+        # [2차]: 정해진 걸음 수만큼 한 걸음씩 내려갑니다.
+        for _ in range(num_steps):
+            # [1차]: 현재 위치에서 grad_fn을 호출해 기울기 벡터를 구합니다.
+            # [2차]: 지금 서 있는 곳의 경사가 어느 쪽으로 얼마나 가파른지 잽니다.
+            grads = np.asarray(grad_fn(current), dtype=np.float64)
+            # [1차]: step 메서드를 호출해 다음 위치로 current를 갱신합니다.
+            # [2차]: 경사 반대 방향으로 한 걸음 이동합니다.
+            current = self.step(current, grads)
+            # [1차]: 발산 시 무한대(inf)로 치솟는 것을 막기 위해 상한(clip_bound) 초과 여부를 검사합니다.
+            # [2차]: 보폭이 너무 커서 산 밖으로 100만 미터 이상 날아가면 안전을 위해 기록을 멈춥니다.
+            if clip_bound is not None and np.linalg.norm(current) > clip_bound:
+                # [1차]: 이탈 직전 위치를 history에 추가하고 루프를 조기 종료합니다.
+                # [2차]: 마지막 발산 위치를 일기장에 남기고 하산을 중단합니다.
+                history.append(current.copy())
+                break
+            # [1차]: 정상 업데이트된 위치를 history에 복사 추가합니다.
+            # [2차]: 이동한 새 좌표를 발자국 일기장에 차곡차곡 기록합니다.
+            history.append(current.copy())
+
+        # [1차]: 리스트에 모인 궤적을 (T+1, D) 2D NumPy 배열로 변환해 반환합니다.
+        # [2차]: 지금까지 모은 발자국 일기장을 깔끔한 표로 묶어 돌려줍니다.
+        return np.array(history, dtype=np.float64)
+
+
+# [1차]: 관성(Momentum) 기반 경사하강법 옵티마이저 클래스를 정의합니다.
+# [2차]: 이전 속도를 기억하며 묵직하게 굴러 내려가는 '볼링공' 옵티마이저 클래스입니다.
+class Momentum:
+    """모멘텀(Momentum) 기반 경사하강법 옵티마이저.
+
+    수식:
+        v_{t+1} = beta * v_t + grad(theta_t)
+        theta_{t+1} = theta_t - lr * v_{t+1}
+    """
+
+    # [1차]: 학습률 lr과 관성 계수 beta(기본 0.9)를 받아 Momentum 객체를 초기화합니다.
+    # [2차]: 볼링공의 보폭(lr)과 이전 속도를 몇 % 유지할지(관성 90%) 설정합니다.
+    def __init__(self, lr: float = 0.1, beta: float = 0.9) -> None:
+        """Momentum 옵티마이저를 초기화합니다.
+
+        Args:
+            lr: 학습률(Learning Rate, 양수).
+            beta: 관성 계수(Momentum Coefficient, 0 <= beta < 1).
+
+        Raises:
+            ValueError: lr <= 0 이거나 beta가 [0, 1) 범위를 벗어날 때 발생.
+        """
+        # [1차]: 학습률이 0 이하인지 확인합니다.
+        # [2차]: 보폭이 0 이하이면 움직일 수 없으므로 막습니다.
+        if lr <= 0.0:
+            # [1차]: lr <= 0일 때 ValueError를 발생시킵니다.
+            # [2차]: 양수 보폭만 넣도록 안내합니다.
+            raise ValueError("학습률 lr은 0보다 큰 양수여야 합니다.")
+        # [1차]: 관성 계수 beta가 0 이상 1 미만 구간에 있는지 확인합니다.
+        # [2차]: 관성이 100% 이상이면 멈추지 않고 폭주하므로 0 이상 1 미만만 허용합니다.
+        if not (0.0 <= beta < 1.0):
+            # [1차]: 유효 범위를 벗어난 beta에 대해 ValueError를 발생시킵니다.
+            # [2차]: "관성 계수는 0과 1 사이여야 합니다"라고 알립니다.
+            raise ValueError("관성 계수 beta는 0 <= beta < 1 범위여야 합니다.")
+        # [1차]: 학습률 lr을 float로 저장합니다.
+        # [2차]: 보폭을 수첩에 적습니다.
+        self.lr = float(lr)
+        # [1차]: 관성 계수 beta를 float로 저장합니다.
+        # [2차]: 관성 비율(예: 0.9)을 수첩에 적습니다.
+        self.beta = float(beta)
+        # [1차]: 누적 속도 벡터 self.velocity를 초기 상태 None으로 설정합니다.
+        # [2차]: 출발 전에는 아직 굴러간 속도가 없으므로 비워둡니다.
+        self.velocity: Optional[np.ndarray] = None
+
+    # [1차]: 누적된 속도 벡터 self.velocity를 None으로 되돌리는 초기화 메서드입니다.
+    # [2차]: 새로운 산에서 다시 출발할 때 이전 볼링공 속도를 0으로 리셋합니다.
+    def reset(self) -> None:
+        """누적된 속도(velocity) 상태를 초기화합니다."""
+        # [1차]: self.velocity를 None으로 재설정합니다.
+        # [2차]: 속도 기억 장치를 깨끗이 비웁니다.
+        self.velocity = None
+
+    # [1차]: 이전 속도에 beta를 곱하고 현재 기울기 grads를 더해 파라미터를 업데이트합니다.
+    # [2차]: 기존에 굴러가던 관성 + 지금 발밑의 경사를 합쳐서 한 걸음 크게 굴러갑니다.
+    def step(self, params: np.ndarray, grads: np.ndarray) -> np.ndarray:
+        """속도를 누적하여 단일 파라미터 업데이트 스텝을 수행합니다.
+
+        Args:
+            params: 현재 파라미터 벡터.
+            grads: 현재 파라미터에 대한 기울기 벡터.
+
+        Returns:
+            업데이트된 파라미터 벡터.
+        """
+        # [1차]: params를 float64 배열로 변환합니다.
+        # [2차]: 현재 좌표를 숫자 배열로 다듬습니다.
+        p = np.asarray(params, dtype=np.float64)
+        # [1차]: grads를 float64 배열로 변환합니다.
+        # [2차]: 현재 경사를 숫자 배열로 다듬습니다.
+        g = np.asarray(grads, dtype=np.float64)
+        # [1차]: 첫 스텝이거나 파라미터 shape이 달라진 경우 0 벡터로 속도를 초기화합니다.
+        # [2차]: 첫 출발이라면 속도를 0으로 맞춰 준비합니다.
+        if self.velocity is None or self.velocity.shape != p.shape:
+            # [1차]: p와 같은 모양의 0 배열을 생성해 self.velocity에 할당합니다.
+            # [2차]: 정지 상태의 속도 벡터를 만듭니다.
+            self.velocity = np.zeros_like(p, dtype=np.float64)
+
+        # [1차]: v_{t+1} = beta * v_t + grad 수식으로 속도를 갱신합니다.
+        # [2차]: 이전 속도의 90%를 유지한 채 현재 경사의 힘을 보태 새 속도를 만듭니다.
+        self.velocity = self.beta * self.velocity + g
+        # [1차]: 갱신된 속도 방향으로 lr만큼 차감한 새 파라미터를 반환합니다.
+        # [2차]: 완성된 속도 방향으로 보폭만큼 굴러간 새 좌표를 돌려줍니다.
+        return p - self.lr * self.velocity
+
+    # [1차]: init_params에서 시작해 num_steps회 모멘텀 업데이트를 수행하고 궤적을 반환합니다.
+    # [2차]: 볼링공을 굴려 출발점부터 골짜기 바닥까지의 이동 경로를 기록합니다.
+    def optimize(
+        self,
+        grad_fn: Callable[[np.ndarray], np.ndarray],
+        init_params: np.ndarray,
+        num_steps: int = 100,
+        clip_bound: Optional[float] = 1e6,
+    ) -> np.ndarray:
+        """주어진 기울기 함수에 대해 num_steps만큼 모멘텀 최적화를 수행하고 궤적을 반환합니다.
+
+        Args:
+            grad_fn: 파라미터를 입력받아 기울기 벡터를 반환하는 함수.
+            init_params: 초기 파라미터 벡터.
+            num_steps: 반복 횟수.
+            clip_bound: 발산 시 오버플로우 방지를 위한 상한.
+
+        Returns:
+            (T+1, D) 형태의 최적화 파라미터 궤적 배열.
+
+        Raises:
+            ValueError: num_steps <= 0 일 때 발생.
+        """
+        # [1차]: 반복 횟수 num_steps가 양수인지 검증합니다.
+        # [2차]: 0 이하의 걸음 수는 허용하지 않습니다.
+        if num_steps <= 0:
+            # [1차]: 잘못된 반복 횟수에 대해 ValueError를 발생시킵니다.
+            # [2차]: 최소 1회 이상 반복하도록 안내합니다.
+            raise ValueError("num_steps는 1 이상이어야 합니다.")
+
+        # [1차]: 새 최적화 시작 전 이전 궤적의 속도가 남지 않도록 reset()을 호출합니다.
+        # [2차]: 출발 전 볼링공 속도를 깔끔히 0으로 초기화합니다.
+        self.reset()
+        # [1차]: 초기 좌표를 복사해 current에 저장합니다.
+        # [2차]: 출발점 사본을 만들어 현재 위치로 삼습니다.
+        current = np.asarray(init_params, dtype=np.float64).copy()
+        # [1차]: 궤적 리스트에 시작 좌표를 추가합니다.
+        # [2차]: 발자국 일기장의 첫 줄에 출발점을 적습니다.
+        history: List[np.ndarray] = [current.copy()]
+
+        # [1차]: num_steps만큼 반복하며 모멘텀 스텝을 진행합니다.
+        # [2차]: 정해진 횟수만큼 볼링공을 굴립니다.
+        for _ in range(num_steps):
+            # [1차]: 현재 좌표에서의 기울기를 계산합니다.
+            # [2차]: 지금 위치의 경사를 잽니다.
+            grads = np.asarray(grad_fn(current), dtype=np.float64)
+            # [1차]: 모멘텀 step으로 다음 좌표를 계산합니다.
+            # [2차]: 관성을 실어 다음 위치로 이동합니다.
+            current = self.step(current, grads)
+            # [1차]: 노름이 clip_bound를 초과하면 발산으로 간주하고 중단합니다.
+            # [2차]: 너무 멀리 날아가면 안전을 위해 기록을 멈춥니다.
+            if clip_bound is not None and np.linalg.norm(current) > clip_bound:
+                # [1차]: 마지막 좌표를 기록하고 반복을 탈출합니다.
+                # [2차]: 이탈 지점을 남기고 종료합니다.
+                history.append(current.copy())
+                break
+            # [1차]: 정상 좌표를 history에 추가합니다.
+            # [2차]: 이동한 위치를 일기장에 적습니다.
+            history.append(current.copy())
+
+        # [1차]: 전체 이동 궤적을 2D NumPy 배열로 변환해 반환합니다.
+        # [2차]: 모든 발자국 기록을 표로 묶어 돌려줍니다.
+        return np.array(history, dtype=np.float64)
+
+
+# [1차]: 원형 함수 f(x, y) = x^2 + y^2의 해석적 Gradient (2x, 2y)를 반환합니다.
+# [2차]: 동그란 밥그릇 지형에서 현재 위치의 경사를 바로 알려주는 공식 함수입니다.
+def grad_circle(p: np.ndarray) -> np.ndarray:
+    """f(x, y) = x^2 + y^2의 해석적 Gradient (2x, 2y)."""
+    # [1차]: [2*p[0], 2*p[1]] 형태의 float64 배열을 생성해 반환합니다.
+    # [2차]: x경사는 2x, y경사는 2y로 계산해 돌려줍니다.
+    return np.array([2.0 * p[0], 2.0 * p[1]], dtype=np.float64)
+
+
+# [1차]: 타원형 함수 f(x, y) = x^2 + 10y^2의 해석적 Gradient (2x, 20y)를 반환합니다.
+# [2차]: y축 방향이 10배 더 가파른 좁은 계곡 지형에서 경사를 알려주는 함수입니다.
+def grad_ellipse(p: np.ndarray) -> np.ndarray:
+    """타원형 함수 f(x, y) = x^2 + 10y^2의 해석적 Gradient (2x, 20y)."""
+    # [1차]: [2*p[0], 20*p[1]] 형태의 float64 배열을 생성해 반환합니다.
+    # [2차]: x경사는 완만하게(2x), y경사는 가파르게(20y) 계산해 돌려줍니다.
+    return np.array([2.0 * p[0], 20.0 * p[1]], dtype=np.float64)
+
+
+# [1차]: VanillaGD의 수렴(lr=0.1)과 발산(lr=1.05 >= 0.5) 경로를 나란히 시각화합니다.
+# [2차]: 적당한 보폭(0.1)일 때는 얌전히 골짜기에 도착하지만, 너무 큰 보폭(1.05)이면 산 밖으로 튕겨 나가는 모습을 그림으로 비교합니다.
+def visualize_gd_convergence(output_dir: str = "outputs") -> str:
+    """VanillaGD의 수렴(lr=0.1)과 발산(lr=1.05 >= 0.5) 경로를 등고선 위에 시각화합니다.
+
+    f(x, y) = x^2 + y^2 에서:
+    - lr = 0.1, 100회 반복 -> 원점 근처(반경 0.1 이내) 수렴
+    - lr = 1.05 (lr >= 0.5 영역) -> 매 스텝 |1 - 2*lr| = 1.1 > 1 이므로 발산
+
+    Args:
+        output_dir: 결과 PNG 저장 디렉토리.
+
+    Returns:
+        저장된 PNG 파일 경로 문자열.
+    """
+    # [1차]: 출력 폴더 Path 객체를 생성합니다.
+    # [2차]: 그림을 넣을 보관함 주소를 준비합니다.
+    out_path = Path(output_dir)
+    # [1차]: 폴더가 없으면 생성합니다.
+    # [2차]: 보관함이 없으면 새로 만듭니다.
+    out_path.mkdir(parents=True, exist_ok=True)
+    # [1차]: 마이너스 기호 깨짐을 방지합니다.
+    # [2차]: 음수 눈금이 깨지지 않게 설정합니다.
+    plt.rcParams["axes.unicode_minus"] = False
+
+    # [1차]: 수렴 테스트용 초기 좌표 [4.0, 3.0]을 정의합니다.
+    # [2차]: 출발점 (4, 3)을 정합니다.
+    init_pt = np.array([4.0, 3.0], dtype=np.float64)
+    # [1차]: lr=0.1로 100회 반복한 수렴 궤적을 계산합니다.
+    # [2차]: 적당한 보폭(0.1)으로 100걸음 걸어간 발자국을 얻습니다.
+    gd_conv = VanillaGD(lr=0.1).optimize(grad_circle, init_pt, num_steps=100)
+    # [1차]: lr=1.05(0.5 이상)로 12회 반복한 발산 궤적을 계산합니다.
+    # [2차]: 너무 큰 보폭(1.05)으로 12걸음 성큼성큼 뛰다가 튕겨 나가는 발자국을 얻습니다.
+    gd_div = VanillaGD(lr=1.05).optimize(grad_circle, np.array([1.0, 0.8]), num_steps=12)
+
+    # [1차]: 1행 2열의 서브플롯(13x5.5 인치)을 생성합니다.
+    # [2차]: 왼쪽엔 수렴, 오른쪽엔 발산을 나란히 그릴 두 칸짜리 도화지를 펼칩니다.
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+
+    # [1차]: 등고선용 x, y 격자를 생성합니다.
+    # [2차]: 왼쪽 지도용 바둑판 격자를 만듭니다.
+    gx, gy = np.meshgrid(np.linspace(-5, 5, 150), np.linspace(-5, 5, 150))
+    # [1차]: 격자점 높이 z = x^2 + y^2를 계산합니다.
+    # [2차]: 밥그릇 지형의 높이를 계산합니다.
+    gz = gx ** 2 + gy ** 2
+    # [1차]: 왼쪽 패널에 등고선을 그립니다.
+    # [2차]: 지도에 둥근 등고선을 그립니다.
+    axes[0].contour(gx, gy, gz, levels=[0.5, 2, 5, 10, 20, 30], colors="#7f8c8d", alpha=0.6)
+    # [1차]: 수렴 경로를 파란 점선과 원형 마커('b--o')로 그립니다.
+    # [2차]: 등산객의 발자국을 파란 점선으로 이어 그립니다.
+    axes[0].plot(gd_conv[:, 0], gd_conv[:, 1], "b--o", markersize=3, linewidth=1.8, label="VanillaGD (lr=0.1)")
+    # [1차]: 원점 (0, 0)에 초록색 별 마커를 표시합니다.
+    # [2차]: 목표 지점인 골짜기 바닥(0, 0)에 초록 별 깃발을 꽂습니다.
+    axes[0].scatter([0], [0], color="green", marker="*", s=160, zorder=6, label="Minimum (0, 0)")
+    # [1차]: 가로세로 축 비율을 1:1로 맞춥니다.
+    # [2차]: 원이 찌그러지지 않게 비율을 고정합니다.
+    axes[0].set_aspect("equal", adjustable="box")
+    # [1차]: 최종 거리(norm)를 포함한 제목을 설정합니다.
+    # [2차]: 100걸음 뒤 원점에 얼마나 가까워졌는지 제목에 적어줍니다.
+    axes[0].set_title(f"Convergence (lr=0.1, 100 steps)\nFinal norm={np.linalg.norm(gd_conv[-1]):.2e}")
+    # [1차]: x축 라벨을 설정합니다.
+    # [2차]: 가로축 이름표를 붙입니다.
+    axes[0].set_xlabel("x")
+    # [1차]: y축 라벨을 설정합니다.
+    # [2차]: 세로축 이름표를 붙입니다.
+    axes[0].set_ylabel("y")
+    # [1차]: 점선 격자를 켭니다.
+    # [2차]: 모눈종이 선을 켭니다.
+    axes[0].grid(True, linestyle=":", alpha=0.6)
+    # [1차]: 범례를 표시합니다.
+    # [2차]: 설명표를 붙입니다.
+    axes[0].legend()
+
+    # [1차]: 발산 그래프용 격자를 생성합니다.
+    # [2차]: 오른쪽 지도용 바둑판 격자를 만듭니다.
+    gx2, gy2 = np.meshgrid(np.linspace(-4, 4, 150), np.linspace(-4, 4, 150))
+    # [1차]: 발산 그래프용 높이 z를 계산합니다.
+    # [2차]: 밥그릇 높이를 계산합니다.
+    gz2 = gx2 ** 2 + gy2 ** 2
+    # [1차]: 오른쪽 패널에 등고선을 그립니다.
+    # [2차]: 등고선을 그립니다.
+    axes[1].contour(gx2, gy2, gz2, levels=[1, 3, 6, 10, 16], colors="#7f8c8d", alpha=0.6)
+    # [1차]: 발산 경로를 빨간 점선 마커('r--o')로 그립니다.
+    # [2차]: 바깥으로 점점 커지며 튕겨 나가는 발자국을 빨간 점선으로 그립니다.
+    axes[1].plot(gd_div[:, 0], gd_div[:, 1], "r--o", markersize=4, linewidth=1.8, label="VanillaGD (lr=1.05 >= 0.5)")
+    # [1차]: 원점에 초록색 별 마커를 찍습니다.
+    # [2차]: 목표 깃발을 꽂습니다.
+    axes[1].scatter([0], [0], color="green", marker="*", s=160, zorder=6, label="Minimum (0, 0)")
+    # [1차]: 축 비율을 1:1로 고정합니다.
+    # [2차]: 비율을 1:1로 맞춥니다.
+    axes[1].set_aspect("equal", adjustable="box")
+    # [1차]: x축 범위를 -4 ~ 4로 제한합니다.
+    # [2차]: 화면 가로 범위를 고정합니다.
+    axes[1].set_xlim(-4.0, 4.0)
+    # [1차]: y축 범위를 -4 ~ 4로 제한합니다.
+    # [2차]: 화면 세로 범위를 고정합니다.
+    axes[1].set_ylim(-4.0, 4.0)
+    # [1차]: 오른쪽 패널 제목을 설정합니다.
+    # [2차]: "보폭이 너무 커서 발산했다"는 제목을 붙입니다.
+    axes[1].set_title("Divergence (lr=1.05 >= 0.5 on x^2 + y^2)")
+    # [1차]: x축 라벨을 설정합니다.
+    # [2차]: 가로축 이름표를 붙입니다.
+    axes[1].set_xlabel("x")
+    # [1차]: y축 라벨을 설정합니다.
+    # [2차]: 세로축 이름표를 붙입니다.
+    axes[1].set_ylabel("y")
+    # [1차]: 점선 격자를 켭니다.
+    # [2차]: 모눈종이 선을 켭니다.
+    axes[1].grid(True, linestyle=":", alpha=0.6)
+    # [1차]: 범례를 표시합니다.
+    # [2차]: 설명표를 붙입니다.
+    axes[1].legend()
+
+    # [1차]: 저장 파일 경로를 조합합니다.
+    # [2차]: 저장할 사진 파일 이름을 정합니다.
+    save_path = out_path / "opt_gd_divergence.png"
+    # [1차]: 전체 Figure 상단 제목을 설정합니다.
+    # [2차]: 두 그림을 아우르는 큰 제목을 굵게 적습니다.
+    fig.suptitle("VanillaGD Convergence vs Divergence", fontsize=13, fontweight="bold")
+    # [1차]: 레이아웃 여백을 자동 조정합니다.
+    # [2차]: 글자가 겹치지 않게 정리합니다.
+    fig.tight_layout()
+    # [1차]: 150 DPI PNG로 저장합니다.
+    # [2차]: 사진 파일로 인화합니다.
+    fig.savefig(save_path, dpi=150)
+    # [1차]: Figure를 닫아 메모리를 해제합니다.
+    # [2차]: 도화지를 치웁니다.
+    plt.close(fig)
+    # [1차]: 저장 경로 문자열을 반환합니다.
+    # [2차]: 사진 주소를 돌려줍니다.
+    return str(save_path)
+
+
+# [1차]: 원형(x^2+y^2) 및 타원형(x^2+10y^2) 함수에서 VanillaGD와 Momentum 경로를 겹쳐 시각화합니다.
+# [2차]: 둥근 그릇과 좁은 타원 계곡에서 일반 등산객과 볼링공(Momentum)의 이동 경로를 나란히 비교합니다.
+def visualize_optimizer_comparison(output_dir: str = "outputs") -> List[str]:
+    """원형(x^2+y^2) 및 타원형(x^2+10y^2) 함수에서 VanillaGD와 Momentum 비교 시각화.
+
+    Args:
+        output_dir: 결과 PNG 저장 디렉토리.
+
+    Returns:
+        생성된 PNG 파일 경로 목록.
+    """
+    # [1차]: 출력 디렉토리 Path 객체를 생성합니다.
+    # [2차]: 저장 폴더 주소를 준비합니다.
+    out_path = Path(output_dir)
+    # [1차]: 폴더가 없으면 생성합니다.
+    # [2차]: 보관함이 없으면 새로 만듭니다.
+    out_path.mkdir(parents=True, exist_ok=True)
+    # [1차]: 마이너스 기호 깨짐을 방지합니다.
+    # [2차]: 음수 눈금이 깨지지 않게 설정합니다.
+    plt.rcParams["axes.unicode_minus"] = False
+
+    # [1차]: 생성된 파일 경로를 담을 빈 리스트를 초기화합니다.
+    # [2차]: 완성된 사진 주소들을 모아둘 바구니를 만듭니다.
+    saved_paths: List[str] = []
+
+    # [1차]: 원형 함수 테스트용 시작점 [4.0, 3.0]을 정의합니다.
+    # [2차]: 첫 번째 실험의 출발점을 정합니다.
+    init_circle = np.array([4.0, 3.0], dtype=np.float64)
+    # [1차]: 원형 함수에서 VanillaGD 50스텝 궤적을 구합니다.
+    # [2차]: 일반 등산객의 50걸음 발자국을 기록합니다.
+    path_gd_c = VanillaGD(lr=0.1).optimize(grad_circle, init_circle, num_steps=50)
+    # [1차]: 원형 함수에서 Momentum 50스텝 궤적을 구합니다.
+    # [2차]: 볼링공의 50스텝 굴러간 경로를 기록합니다.
+    path_mom_c = Momentum(lr=0.1, beta=0.9).optimize(grad_circle, init_circle, num_steps=50)
+
+    # [1차]: 원형 함수 등고선용 격자를 생성합니다.
+    # [2차]: 바둑판 좌표를 만듭니다.
+    gx, gy = np.meshgrid(np.linspace(-5, 5, 150), np.linspace(-5, 5, 150))
+    # [1차]: 원형 함수 높이 z를 계산합니다.
+    # [2차]: 밥그릇 높이를 계산합니다.
+    gz_c = gx ** 2 + gy ** 2
+    # [1차]: 7x6 인치 Figure를 생성합니다.
+    # [2차]: 첫 번째 비교 그림 도화지를 펼칩니다.
+    fig1, ax1 = plt.subplots(figsize=(7, 6))
+    # [1차]: 등고선을 그립니다.
+    # [2차]: 둥근 등고선을 그립니다.
+    ax1.contour(gx, gy, gz_c, levels=[0.5, 2, 5, 10, 20, 30], colors="#95a5a6", alpha=0.6)
+    # [1차]: VanillaGD 경로를 파란 점선으로 그립니다.
+    # [2차]: 등산객 발자국을 파란 점선으로 그립니다.
+    ax1.plot(path_gd_c[:, 0], path_gd_c[:, 1], "b--o", markersize=3, linewidth=1.8, label="VanillaGD (lr=0.1)")
+    # [1차]: Momentum 경로를 빨간 실선과 사각 마커로 그립니다.
+    # [2차]: 볼링공 경로를 빨간 실선으로 겹쳐 그립니다.
+    ax1.plot(path_mom_c[:, 0], path_mom_c[:, 1], "r-s", markersize=3, linewidth=1.8, label="Momentum (lr=0.1, beta=0.9)")
+    # [1차]: 원점에 초록색 별을 표시합니다.
+    # [2차]: 목표 깃발을 꽂습니다.
+    ax1.scatter([0], [0], color="green", marker="*", s=160, zorder=6, label="Minimum (0, 0)")
+    # [1차]: 축 비율을 1:1로 맞춥니다.
+    # [2차]: 비율을 고정합니다.
+    ax1.set_aspect("equal", adjustable="box")
+    # [1차]: 그래프 제목을 설정합니다.
+    # [2차]: 제목을 붙입니다.
+    ax1.set_title("VanillaGD vs Momentum on f(x, y) = x^2 + y^2")
+    # [1차]: x축 라벨을 설정합니다.
+    # [2차]: 가로축 이름표를 붙입니다.
+    ax1.set_xlabel("x")
+    # [1차]: y축 라벨을 설정합니다.
+    # [2차]: 세로축 이름표를 붙입니다.
+    ax1.set_ylabel("y")
+    # [1차]: 격자선을 켭니다.
+    # [2차]: 모눈종이를 켭니다.
+    ax1.grid(True, linestyle=":", alpha=0.6)
+    # [1차]: 범례를 표시합니다.
+    # [2차]: 설명표를 붙입니다.
+    ax1.legend()
+    # [1차]: 저장 경로를 지정합니다.
+    # [2차]: 첫 번째 사진 이름을 정합니다.
+    p1 = out_path / "opt_comparison_circle.png"
+    # [1차]: 여백을 정리합니다.
+    # [2차]: 여백을 맞춥니다.
+    fig1.tight_layout()
+    # [1차]: PNG 파일로 저장합니다.
+    # [2차]: 사진 파일로 인화합니다.
+    fig1.savefig(p1, dpi=150)
+    # [1차]: Figure를 닫습니다.
+    # [2차]: 도화지를 치웁니다.
+    plt.close(fig1)
+    # [1차]: 저장된 경로를 목록에 추가합니다.
+    # [2차]: 주소 바구니에 담습니다.
+    saved_paths.append(str(p1))
+
+    # [1차]: 타원형 함수 테스트용 시작점 [8.0, 2.0]을 정의합니다.
+    # [2차]: 두 번째 실험(좁은 계곡) 출발점을 정합니다.
+    init_ellipse = np.array([8.0, 2.0], dtype=np.float64)
+    # [1차]: 타원형 함수에서 VanillaGD(lr=0.085) 50스텝 궤적을 구합니다.
+    # [2차]: 일반 등산객이 좁은 계곡 벽에 부딪히며 지그재그로 내려가는 경로를 기록합니다.
+    path_gd_e = VanillaGD(lr=0.085).optimize(grad_ellipse, init_ellipse, num_steps=50)
+    # [1차]: 타원형 함수에서 Momentum(lr=0.04, beta=0.9) 50스텝 궤적을 구합니다.
+    # [2차]: 볼링공이 위아래 진동을 상쇄하고 계곡 바닥을 따라 부드럽게 굴러가는 경로를 기록합니다.
+    path_mom_e = Momentum(lr=0.04, beta=0.9).optimize(grad_ellipse, init_ellipse, num_steps=50)
+
+    # [1차]: 타원형 함수 등고선용 x, y 격자를 생성합니다.
+    # [2차]: 가로로 긴 계곡 지도 격자를 만듭니다.
+    gx_e, gy_e = np.meshgrid(np.linspace(-9, 9, 200), np.linspace(-3, 3, 200))
+    # [1차]: 타원형 함수 높이 z = x^2 + 10*y^2를 계산합니다.
+    # [2차]: 계곡의 높이를 계산합니다.
+    gz_e = gx_e ** 2 + 10.0 * (gy_e ** 2)
+    # [1차]: 8x5 인치 Figure를 생성합니다.
+    # [2차]: 두 번째 비교 그림 도화지를 펼칩니다.
+    fig2, ax2 = plt.subplots(figsize=(8, 5))
+    # [1차]: 타원형 등고선을 그립니다.
+    # [2차]: 길쭉한 타원형 등고선을 그립니다.
+    ax2.contour(gx_e, gy_e, gz_e, levels=[1, 5, 15, 30, 60, 100], colors="#95a5a6", alpha=0.6)
+    # [1차]: VanillaGD의 지그재그 경로를 파란 점선으로 그립니다.
+    # [2차]: 등산객의 지그재그 발자국을 파란 점선으로 그립니다.
+    ax2.plot(path_gd_e[:, 0], path_gd_e[:, 1], "b--o", markersize=3, linewidth=1.8, label="VanillaGD (lr=0.085)")
+    # [1차]: Momentum의 부드러운 경로를 빨간 실선으로 그립니다.
+    # [2차]: 볼링공의 매끄러운 경로를 빨간 실선으로 겹쳐 그립니다.
+    ax2.plot(path_mom_e[:, 0], path_mom_e[:, 1], "r-s", markersize=3, linewidth=1.8, label="Momentum (lr=0.04, beta=0.9)")
+    # [1차]: 원점에 초록색 별을 표시합니다.
+    # [2차]: 목표 깃발을 꽂습니다.
+    ax2.scatter([0], [0], color="green", marker="*", s=160, zorder=6, label="Minimum (0, 0)")
+    # [1차]: 그래프 제목을 설정합니다.
+    # [2차]: 제목을 붙입니다.
+    ax2.set_title("VanillaGD vs Momentum on Elliptical f(x, y) = x^2 + 10y^2")
+    # [1차]: x축 라벨을 설정합니다.
+    # [2차]: 가로축 이름표를 붙입니다.
+    ax2.set_xlabel("x")
+    # [1차]: y축 라벨을 설정합니다.
+    # [2차]: 세로축 이름표를 붙입니다.
+    ax2.set_ylabel("y")
+    # [1차]: 격자선을 켭니다.
+    # [2차]: 모눈종이를 켭니다.
+    ax2.grid(True, linestyle=":", alpha=0.6)
+    # [1차]: 범례를 표시합니다.
+    # [2차]: 설명표를 붙입니다.
+    ax2.legend()
+    # [1차]: 두 번째 파일 저장 경로를 지정합니다.
+    # [2차]: 두 번째 사진 이름을 정합니다.
+    p2 = out_path / "opt_comparison_ellipse.png"
+    # [1차]: 여백을 정리합니다.
+    # [2차]: 여백을 맞춥니다.
+    fig2.tight_layout()
+    # [1차]: PNG로 저장합니다.
+    # [2차]: 사진 파일로 인화합니다.
+    fig2.savefig(p2, dpi=150)
+    # [1차]: Figure를 닫아 메모리를 해제합니다.
+    # [2차]: 도화지를 치웁니다.
+    plt.close(fig2)
+    # [1차]: 저장된 경로를 목록에 추가합니다.
+    # [2차]: 주소 바구니에 담습니다.
+    saved_paths.append(str(p2))
+
+    # [1차]: 생성된 PNG 경로 목록을 반환합니다.
+    # [2차]: 완성된 두 장의 사진 주소를 돌려줍니다.
+    return saved_paths
