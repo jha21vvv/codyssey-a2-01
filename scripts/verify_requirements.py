@@ -100,14 +100,14 @@ def run_all_verifications() -> List[Dict[str, Any]]:
         "passed": bool(deriv_err < 1e-4),
     })
 
-    # 5. VanillaGD 수렴 (lr=0.1, 100 steps -> 반경 < 0.1) & 발산 (lr >= 0.5)
+    # 5. VanillaGD 수렴 (lr=0.1, 100 steps -> 반경 < 0.1 및 < 1.0) & 발산 (lr >= 0.5)
     traj_conv = VanillaGD(lr=0.1).optimize(grad_circle, np.array([4.0, 3.0]), num_steps=100)
     final_radius = float(np.linalg.norm(traj_conv[-1]))
     results.append({
         "id": "OPT-GD-CONV",
-        "requirement": "VanillaGD lr=0.1, 100회 원점 반경 < 0.1",
+        "requirement": "VanillaGD lr=0.1, 100회 반경 < 0.1 (< 1.0)",
         "metric": f"final_radius={final_radius:.2e}",
-        "passed": bool(final_radius < 0.1),
+        "passed": bool(final_radius < 0.1 and final_radius < 1.0),
     })
 
     init_div = np.array([1.0, 0.8])

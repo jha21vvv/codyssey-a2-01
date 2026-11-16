@@ -124,11 +124,12 @@ def test_calculus_edge_cases():
 # 3. 최적화 (Optimizer) 테스트
 # ---------------------------------------------------------------------------
 def test_vanilla_gd_converges_within_radius_0_1():
-    """VanillaGD(lr=0.1)가 100회 반복 후 원점 반경 0.1 이내로 수렴하는지 검증."""
+    """VanillaGD(lr=0.1)가 100회 반복 후 원점 반경 0.1 이내(및 평가 기준 반경 1.0 이내)로 수렴하는지 검증."""
     gd = VanillaGD(lr=0.1)
     traj = gd.optimize(grad_circle, np.array([4.0, 3.0]), num_steps=100)
     final_norm = float(np.linalg.norm(traj[-1]))
     assert final_norm < 0.1
+    assert final_norm < 1.0
 
 
 def test_vanilla_gd_diverges_when_lr_ge_0_5():
